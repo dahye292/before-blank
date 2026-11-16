@@ -129,8 +129,6 @@ document.addEventListener("click", (e) => {
     b.setAttribute("aria-checked", String(next === "dark"));
     b.title = next === "dark" ? "밝은 화면으로" : "어두운 화면으로";
   });
-  const $map = document.getElementById("cmap");
-  if ($map) drawMapLines($map);
 });
 
 const starBtn = (on, label) =>
@@ -1094,17 +1092,31 @@ function jumpToTurn(turnId) {
 
 // ---------- 마인드맵 탭 ----------
 const MM_KEYS = { mine: "mine_only", shared: "shared", ai: "ai_only" };
-const AREAS = { mine: "내 생각", shared: "겹치는 생각", ai: "AI 생각" };
+const AREAS = { mine: "내 생각", shared: "겹치는 생각", ai: "AI 생각" };  // 칸 이름 = 범례
+
+// 설명은 화면에 늘어놓지 않고 ⓘ에 마우스를 올리거나 눌렀을 때만 보이게
+const tip = (text, label = "설명") => `<button type="button" class="tip-btn" data-tip="${esc(text)}" aria-label="${esc(label)}: ${esc(text)}">i</button>`;
 
 async function renderMapTab($panel, topic, turns, refresh = false) {
   $panel.innerHTML = `
     <div class="map-page">
       <div class="map-bar">
-        <p id="map-summary">내 생각과 AI 답의 핵심을 모아, 겹치는 생각은 가운데로 모았어요.</p>
+        <div class="legend" aria-label="범례">
+          <span class="lg"><i class="lg-box"></i>같은 생각</span>
+          <span class="lg"><i class="lg-box similar"></i>비슷한 생각</span>
+          ${tip("질문마다 내 생각과 AI 답의 핵심을 나눠 정리했어요. 가운데는 둘이 겹치는 생각이에요. AI가 정리한 결과라 틀릴 수 있으니, 다르면 '직접 고치기'로 바로잡아 주세요. 요점을 누르면 그 대화로 이동해요.", "마인드맵 안내")}
+          <span id="map-badges"></span>
+        </div>
         <div class="map-tools">
-          <span class="legend"><i></i>같은 생각 <i class="similar"></i>비슷한 생각</span>
+          <span id="map-turn-filter"></span>
           <button class="btn btn-sm" id="map-edit" aria-pressed="false" hidden>직접 고치기</button>
-          <button class="btn btn-sm" id="map-refresh">다시 정리</button>
+          <div class="more">
+            <button class="btn btn-sm btn-ghost more-btn" id="map-more" aria-haspopup="menu" aria-expanded="false" aria-label="더보기" title="더보기">⋯</button>
+            <div class="more-menu" id="map-more-menu" role="menu" hidden>
+              <button role="menuitem" id="mv-compact" hidden>설명 숨기기</button>
+              <button role="menuitem" id="map-refresh">AI로 다시 정리</button>
+            </div>
+          </div>
         </div>
       </div>
       <div id="map-notice"></div>
@@ -1113,7 +1125,19 @@ async function renderMapTab($panel, topic, turns, refresh = false) {
       <div id="map-area"><div class="map-loading">대화 전체에서 내 생각과 AI 답의 핵심을 정리하는 중…</div></div>
     </div>`;
   const ctx = { topic, turns, data: null, editing: false, turnNo: Object.fromEntries(turns.map((t, i) => [t.id, i + 1])) };
+  const $more = document.getElementById("map-more"), $moreMenu = document.getElementById("map-more-menu");
+  const closeMore = () => { $moreMenu.hidden = true; $more.setAttribute("aria-expanded", "false"); };
+  $more.onclick = (e) => { e.stopPropagation(); $moreMenu.hidden = !$moreMenu.hidden; $more.setAttribute("aria-expanded", String(!$moreMenu.hidden)); };
+  if (!renderMapTab.bound) {  // 바깥을 누르면 ⋯ 메뉴 닫기 (한 번만 등록)
+    renderMapTab.bound = true;
+    document.addEventListener("click", (e) => {
+      if (e.target.closest(".more")) return;
+      const m = document.getElementById("map-more-menu");
+      if (m) { m.hidden = true; document.getElementById("map-more")?.setAttribute("aria-expanded", "false"); }
+    });
+  }
   document.getElementById("map-refresh").onclick = async () => {
+    closeMore();
     if (ctx.data?.edited && !(await ask({ title: "마인드맵을 다시 정리할까요?", message: "AI가 처음부터 다시 만들어서, 직접 고친 내용은 사라져요.", confirmText: "다시 정리" }))) return;
     renderMapTab($panel, topic, turns, true);
   };
@@ -1125,7 +1149,7 @@ async function renderMapTab($panel, topic, turns, refresh = false) {
   if (!document.body.contains($area)) return; // 그새 다른 화면으로 이동함
   if (data.empty) {
     $area.innerHTML = `<div class="map-loading">AI 답을 받은 대화가 생기면 마인드맵을 만들 수 있어요.</div>`;
-    document.getElementById("map-refresh").hidden = true;
+    document.querySelector(".more").hidden = true;
     return;
   }
   ctx.data = data;
@@ -1155,34 +1179,32 @@ const cloneMap = (d) => JSON.parse(JSON.stringify({ mine_only: d.mine_only, shar
 
 function paintMap(ctx) {
   const { topic, turns, data, turnNo } = ctx;
-  const mine = data.mine_only, shared = data.shared, ai = data.ai_only, uncertain = data.uncertain || [];
-  document.getElementById("map-summary").textContent =
-    `겹치는 생각 ${shared.length}개 · 나만의 관점 ${mine.length}개 · AI의 새로운 관점 ${ai.length}개` +
-    (ctx.editing ? " — 요점을 누르면 고칠 수 있어요" : " — 요점을 누르면 그 대화로 이동해요");
+  const items = { mine: data.mine_only, shared: data.shared, ai: data.ai_only };
+  const uncertain = data.uncertain || [];
+  const jump = (tid) => { location.hash = `#/topic/${topic.id}?turn=${tid}`; };
 
-  // AI 판단에 대한 안내 (+ 직접 고친 상태, 대화가 늘어난 상태)
-  document.getElementById("map-notice").innerHTML = `
-    <div class="map-note">
-      <b>AI가 정리한 결과예요.</b> 특히 '겹치는 생각'은 AI가 잘못 판단했을 수 있어요. 다르면 <b>직접 고치기</b>로 바로잡아 주세요.
-      ${data.edited ? `<span class="edited-tag">직접 고친 마인드맵</span>` : ""}
-    </div>
-    ${data.stale ? `<div class="map-note warn">대화가 새로 늘었어요. <b>다시 정리</b>하면 새 대화가 반영되지만, 직접 고친 내용은 사라져요.</div>` : ""}`;
+  // 상태는 짧은 표시로만 (설명은 툴팁)
+  document.getElementById("map-badges").innerHTML =
+    (data.edited ? `<span class="map-badge" data-tip="AI가 정리한 뒤 직접 고친 마인드맵이에요">직접 고침</span>` : "") +
+    (ctx.editing ? `<span class="map-badge on">고치는 중</span>` : "");
+  document.getElementById("map-notice").innerHTML = data.stale
+    ? `<div class="map-note warn">새 대화가 아직 반영되지 않았어요 ${tip("'⋯ → AI로 다시 정리'를 누르면 새 대화까지 반영돼요. 직접 고친 내용은 사라져요.", "다시 정리 안내")}</div>`
+    : "";
 
-  // AI가 애매하다고 한 요점: 사용자에게 묻기
   // 첨부 자료 정리: 자료마다 요약, 핵심, 내 생각과의 연결
   const files = Object.fromEntries(turns.flatMap((t) => (t.attachments || []).map((a) => [a.id, a])));
   const materials = (data.materials || []).filter((m) => files[m.attachment_id]);
   const $mat = document.getElementById("map-materials");
   $mat.innerHTML = materials.length ? `
     <section class="map-materials" aria-label="첨부 자료 정리">
-      <h3>첨부 자료 <small>${materials.length}개 · AI가 자료를 읽고 정리했어요</small></h3>
+      <h3>첨부 자료 <span class="h-count">${materials.length}</span> ${tip("AI가 첨부한 자료를 읽고 요약·핵심·내 생각과의 연결을 정리했어요.", "첨부 자료 안내")}</h3>
       <div class="mat-grid">
         ${materials.map((m) => `
           <article class="mat">
             <header>
               <span class="fc-kind">${fileKindLabel(files[m.attachment_id].filename)}</span>
               <span class="mat-name">${esc(files[m.attachment_id].filename)}</span>
-              ${(m.turn_ids || []).map((tid) => `<button class="turn-chip" data-jump="${tid}">대화 ${turnNo[tid] ?? "?"}</button>`).join("")}
+              ${(m.turn_ids || []).map((tid) => `<button class="turn-link" data-jump="${tid}">대화 ${turnNo[tid] ?? "?"}</button>`).join("")}
             </header>
             <p class="mat-sum">${esc(m.summary)}</p>
             ${m.key_points?.length ? `<ul class="mat-points">${m.key_points.map((k) => `<li>${esc(k)}</li>`).join("")}</ul>` : ""}
@@ -1190,22 +1212,19 @@ function paintMap(ctx) {
           </article>`).join("")}
       </div>
     </section>` : "";
-  $mat.onclick = (e) => {
-    const j = e.target.closest("[data-jump]");
-    if (j) location.hash = `#/topic/${topic.id}?turn=${j.dataset.jump}`;
-  };
+  $mat.onclick = (e) => { const j = e.target.closest("[data-jump]"); if (j) jump(j.dataset.jump); };
 
+  // AI가 애매하다고 한 요점: 사용자에게 묻기
   const $ask = document.getElementById("map-ask");
   $ask.innerHTML = uncertain.length ? `
     <section class="map-ask" aria-label="확인이 필요한 요점">
-      <h3>AI가 판단하기 애매한 요점이 ${uncertain.length}개 있어요 <small>직접 정해 주세요</small></h3>
+      <h3>애매한 요점 <span class="h-count">${uncertain.length}</span> ${tip("내 생각과 AI 답이 같은 생각인지 AI가 판단하기 어려웠던 요점이에요. 직접 골라 주면 마인드맵에 반영돼요.", "애매한 요점 안내")}</h3>
       ${uncertain.map((u, i) => `
         <div class="ask-item">
-          <p class="ask-q">${esc(u.question)}</p>
           <div class="ask-pair">
             <span class="ask-side mine">${esc(u.mine_label)}</span><span class="ask-vs">와</span>
             <span class="ask-side ai">${esc(u.ai_label)}</span>
-            ${u.turn_ids.map((tid) => `<button class="turn-chip" data-jump="${tid}">대화 ${turnNo[tid] ?? "?"}</button>`).join("")}
+            ${u.turn_ids.map((tid) => `<button class="turn-link" data-jump="${tid}" title="그 대화로 이동">대화 ${turnNo[tid] ?? "?"}</button>`).join("")}
           </div>
           <div class="ask-btns">
             <button class="btn btn-sm" data-resolve="same" data-i="${i}">같은 생각</button>
@@ -1215,14 +1234,14 @@ function paintMap(ctx) {
         </div>`).join("")}
     </section>` : "";
   $ask.onclick = async (e) => {
-    const jump = e.target.closest("[data-jump]");
-    if (jump) { location.hash = `#/topic/${topic.id}?turn=${jump.dataset.jump}`; return; }
+    const j = e.target.closest("[data-jump]");
+    if (j) { jump(j.dataset.jump); return; }
     const b = e.target.closest("[data-resolve]");
     if (!b) return;
     const next = cloneMap(data);
     const [u] = next.uncertain.splice(Number(b.dataset.i), 1);
     if (b.dataset.resolve === "different") {
-      // 서로 다른 생각 → 각자의 영역에 둔다
+      // 서로 다른 생각 → 각자의 칸에 둔다
       if (!next.mine_only.some((p) => p.label === u.mine_label)) next.mine_only.push({ label: u.mine_label, detail: "", turn_ids: u.turn_ids });
       if (!next.ai_only.some((p) => p.label === u.ai_label)) next.ai_only.push({ label: u.ai_label, detail: "", turn_ids: u.turn_ids });
     } else {
@@ -1231,158 +1250,110 @@ function paintMap(ctx) {
       next.ai_only = next.ai_only.filter((p) => p.label !== u.ai_label);
       next.shared.push({
         label: u.shared_label || u.mine_label, kind: b.dataset.resolve,
-        detail: `내 생각 '${u.mine_label}'과 AI의 '${u.ai_label}'를 ${b.dataset.resolve === "same" ? "같은" : "비슷한"} 생각으로 정리했어요.`,
+        detail: `내 생각 '${u.mine_label}'과 AI의 '${u.ai_label}'`,
         turn_ids: u.turn_ids,
       });
     }
     if (await saveMap(ctx, next)) toast("마인드맵에 반영했어요");
   };
 
-  const items = { mine, shared, ai };
-  const usedTurns = turns.filter((t) => [...mine, ...shared, ...ai].some((p) => p.turn_ids.includes(t.id)));
-  const view = loadMapView(topic.id);
+  // ---- 질문별로 묶기: 요점은 처음 나온 대화 아래에 둔다 ----
+  const groups = new Map(turns.map((t) => [t.id, { turn: t, mine: [], shared: [], ai: [] }]));
+  const manual = { turn: null, mine: [], shared: [], ai: [] };
+  for (const side of ["mine", "shared", "ai"]) {
+    items[side].forEach((p, i) => {
+      const g = groups.get(p.turn_ids[0]) || manual;
+      g[side].push({ p, i });
+    });
+  }
+  const filled = (g) => g.mine.length + g.shared.length + g.ai.length > 0;
+  const rows = [...groups.values()].filter(filled);
+  if (filled(manual) || ctx.editing) rows.push(manual);
 
-  const node = (side, p, i) => `
-    <button class="node ${side} ${p.kind || ""}" data-side="${side}" data-i="${i}" ${p.turn_ids.length ? `data-turn="${p.turn_ids[0]}"` : ""} data-turns="${p.turn_ids.join(",")}">
-      <span class="node-label">${esc(p.label)}${side === "shared" ? `<span class="node-kind">${p.kind === "similar" ? "비슷함" : "같음"}</span>` : ""}</span>
-      ${p.detail ? `<span class="node-detail">${esc(p.detail)}</span>` : ""}
-      ${p.turn_ids.length ? `<span class="node-turns">${p.turn_ids.map((tid) => `<span class="turn-chip" data-turn="${tid}">대화 ${turnNo[tid] ?? "?"}</span>`).join("")}</span>` : `<span class="node-turns"><span class="turn-chip muted">직접 추가</span></span>`}
+  const view = loadMapView(topic.id);
+  if (view.turns && view.turns.length !== 1) view.turns = null;
+  const usedTurns = rows.filter((g) => g.turn).map((g) => g.turn);
+  document.getElementById("map-turn-filter").innerHTML = usedTurns.length > 1 ? `
+    <select class="map-select" id="map-turn" aria-label="대화 고르기">
+      <option value="all">모든 질문</option>
+      ${usedTurns.map((t) => `<option value="${t.id}">대화 ${turnNo[t.id]}</option>`).join("")}
+    </select>` : "";
+
+  const ptTip = (side, p) => {
+    if (ctx.editing) return "눌러서 고치기";
+    const kind = side === "shared" ? (p.kind === "similar" ? "비슷한 생각" : "같은 생각") : "";
+    const more = p.turn_ids.length > 1 ? `대화 ${p.turn_ids.map((t) => turnNo[t] ?? "?").join(", ")}에서 나옴` : "";
+    const go = p.turn_ids.length ? "누르면 그 대화로 이동" : "직접 추가한 요점";
+    return [kind, more, go].filter(Boolean).join(" · ");
+  };
+  const point = (side, { p, i }) => `
+    <button class="pt ${side} ${p.kind || ""}" data-side="${side}" data-i="${i}" ${p.turn_ids.length ? `data-turn="${p.turn_ids[0]}"` : ""} title="${esc(ptTip(side, p))}">
+      <span class="pt-label">${esc(p.label)}</span>
+      ${p.detail ? `<span class="pt-detail">${esc(p.detail)}</span>` : ""}
     </button>`;
-  const column = (side) => `
-    <div class="cmap-col ${side}" data-area="${side}">
-      <button class="cmap-head ${side}" data-toggle-area="${side}" aria-expanded="true">
-        <span>${AREAS[side]}</span> <span class="head-count"></span> <span class="caret">▾</span>
-      </button>
-      ${items[side].map((p, i) => node(side, p, i)).join("")}
-      <div class="cmap-empty-col ${side}" data-empty></div>
-      ${ctx.editing ? `<button class="node-add" data-add="${side}">+ 요점 추가</button>` : ""}
+  const col = (side, g) => `
+    <div class="q-col ${side}" data-col="${AREAS[side]}">
+      ${g[side].map((x) => point(side, x)).join("")}
+      ${ctx.editing ? `<button class="pt-add" data-add="${side}" data-turns="${g.turn ? g.turn.id : ""}">+ 추가</button>` : g[side].length ? "" : `<span class="q-empty" aria-label="없음"></span>`}
     </div>`;
 
   document.getElementById("map-area").innerHTML = `
-    <div class="map-view" id="map-view">
-      <div class="mv-group">
-        <span class="mv-label">보기</span>
-        ${Object.entries(AREAS).map(([k, label]) => `<button class="mv-chip area-${k}" data-area-chip="${k}" aria-pressed="true">${label}</button>`).join("")}
+    <div class="qmap ${ctx.editing ? "editing" : ""}" id="cmap">
+      <div class="qmap-head" aria-hidden="true">
+        <span class="mine">${AREAS.mine}</span><span class="shared">${AREAS.shared}</span><span class="ai">${AREAS.ai}</span>
       </div>
-      ${usedTurns.length > 1 ? `
-      <div class="mv-group">
-        <span class="mv-label">대화</span>
-        <button class="mv-chip" data-turn-chip="all">전체</button>
-        ${usedTurns.map((t) => `<button class="mv-chip" data-turn-chip="${t.id}" title="${esc(t.question)}">대화 ${turnNo[t.id]}</button>`).join("")}
-      </div>` : ""}
-      <button class="mv-chip mv-compact" id="mv-compact" aria-pressed="false"></button>
-    </div>
-    <div class="cmap ${ctx.editing ? "editing" : ""}" id="cmap">
-      <svg class="cmap-lines" aria-hidden="true"></svg>
-      <div class="cmap-grid">${column("mine")}${column("shared")}${column("ai")}</div>
+      ${rows.map((g) => `
+        <section class="q-row" data-row="${g.turn ? g.turn.id : "manual"}">
+          ${g.turn
+            ? `<button class="q-title" data-turn="${g.turn.id}" title="누르면 이 대화로 이동"><span class="q-no">${turnNo[g.turn.id]}</span><span class="q-text">${esc(g.turn.question)}</span></button>`
+            : `<div class="q-title manual"><span class="q-text">직접 추가한 요점</span></div>`}
+          <div class="q-cols">${col("mine", g)}${col("shared", g)}${col("ai", g)}</div>
+        </section>`).join("")}
     </div>`;
 
   const $map = document.getElementById("cmap");
-  const $grid = $map.querySelector(".cmap-grid");
-
-  // 보기 설정 적용: 접은 영역, 고른 대화, 요약 접기
   const apply = () => {
-    const turnOk = (n) => !view.turns || n.dataset.turns.split(",").some((id) => view.turns.includes(Number(id)));
-    for (const side of Object.keys(AREAS)) {
-      const $col = $map.querySelector(`.cmap-col.${side}`);
-      const collapsed = view.hidden.includes(side);
-      let visible = 0;
-      $col.querySelectorAll(".node").forEach((n) => {
-        const show = !collapsed && (ctx.editing || turnOk(n));
-        n.hidden = !show;
-        if (show) visible++;
-      });
-      const total = items[side].length;
-      const matched = [...$col.querySelectorAll(".node")].filter((n) => ctx.editing || turnOk(n)).length;
-      $col.classList.toggle("collapsed", collapsed);
-      $col.querySelector(".head-count").textContent = matched;
-      $col.querySelector(".caret").textContent = collapsed ? "▸" : "▾";
-      $col.querySelector("[data-toggle-area]").setAttribute("aria-expanded", String(!collapsed));
-      $col.querySelector("[data-toggle-area]").title = collapsed ? "눌러서 펼치기" : "눌러서 접기";
-      const $add = $col.querySelector("[data-add]");
-      if ($add) $add.hidden = collapsed;
-      const $empty = $col.querySelector("[data-empty]");
-      $empty.textContent = collapsed ? `접어 둠 · ${matched}개`
-        : visible ? ""
-        : total ? "고른 대화에는 없어요"
-        : { mine: "나만의 관점이 없어요", shared: "겹치는 생각이 없어요", ai: "AI만의 관점이 없어요" }[side];
-      $empty.hidden = !$empty.textContent;
-      $grid.style.setProperty(`--c-${side}`, collapsed ? "max-content" : side === "shared" ? "minmax(0, 1.05fr)" : "minmax(0, 1fr)");
-      document.querySelector(`[data-area-chip="${side}"]`).setAttribute("aria-pressed", String(!collapsed));
-    }
-    document.querySelectorAll("[data-turn-chip]").forEach((c) => {
-      const on = c.dataset.turnChip === "all" ? !view.turns : !!view.turns?.includes(Number(c.dataset.turnChip));
-      c.setAttribute("aria-pressed", String(on));
-    });
+    const sel = view.turns ? String(view.turns[0]) : null;
+    $map.querySelectorAll(".q-row").forEach((r) => { r.hidden = !!sel && r.dataset.row !== sel; });
+    const $turnSel = document.getElementById("map-turn");
+    if ($turnSel) $turnSel.value = sel || "all";
     $map.classList.toggle("compact", view.compact && !ctx.editing);
     const $compact = document.getElementById("mv-compact");
-    $compact.setAttribute("aria-pressed", String(view.compact));
-    $compact.textContent = view.compact ? "요약 펼치기" : "요약 접기";
+    $compact.hidden = false;
+    $compact.textContent = view.compact ? "설명 보이기" : "설명 숨기기";
     saveMapView(topic.id, view);
-    drawMapLines($map);
   };
   ctx.apply = apply;
-
-  const toggleArea = (side) => {
-    view.hidden = view.hidden.includes(side) ? view.hidden.filter((s) => s !== side) : [...view.hidden, side];
+  const $turnSel = document.getElementById("map-turn");
+  if ($turnSel) $turnSel.onchange = () => { view.turns = $turnSel.value === "all" ? null : [Number($turnSel.value)]; apply(); };
+  document.getElementById("mv-compact").onclick = () => {
+    view.compact = !view.compact;
+    document.getElementById("map-more-menu").hidden = true;
     apply();
   };
-  document.getElementById("map-view").addEventListener("click", (e) => {
-    const area = e.target.closest("[data-area-chip]");
-    const turn = e.target.closest("[data-turn-chip]");
-    if (area) toggleArea(area.dataset.areaChip);
-    else if (turn) {
-      if (turn.dataset.turnChip === "all") view.turns = null;
-      else {
-        const id = Number(turn.dataset.turnChip);
-        const cur = view.turns || [];
-        const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
-        view.turns = next.length && next.length < usedTurns.length ? next : null;
-      }
-      apply();
-    } else if (e.target.closest("#mv-compact")) {
-      view.compact = !view.compact;
-      apply();
-    }
-  });
 
   $map.addEventListener("click", (e) => {
     if (e.target.closest(".node-editor")) return;
-    // 영역 머리를 누르면 그 영역을 접고 펼친다
-    const head = e.target.closest("[data-toggle-area]");
-    if (head) { toggleArea(head.dataset.toggleArea); return; }
     if (ctx.editing) {
-      // 고치기 모드: 요점을 누르면 편집, '+ 요점 추가'로 새 요점
+      // 고치기 모드: 요점을 누르면 편집, '+ 추가'로 그 질문에 새 요점
       const add = e.target.closest("[data-add]");
-      if (add) { openNodeEditor(ctx, add, add.dataset.add, -1); return; }
-      const n = e.target.closest(".node");
+      if (add) { openNodeEditor(ctx, add, add.dataset.add, -1, add.dataset.turns ? [Number(add.dataset.turns)] : []); return; }
+      const n = e.target.closest(".pt");
       if (n) openNodeEditor(ctx, n, n.dataset.side, Number(n.dataset.i));
       return;
     }
-    // 요점(또는 대화 칩)을 누르면 대화 탭으로 가서 그 대화 위치로 이동
     const target = e.target.closest("[data-turn]");
-    if (!target) return;
-    e.stopPropagation();
-    location.hash = `#/topic/${topic.id}?turn=${target.dataset.turn}`;
+    if (target) jump(target.dataset.turn);
   });
-  // 가운데 요점에 마우스를 올리면 양쪽에서 모이는 선을 강조
-  $map.querySelectorAll(".node.shared").forEach((n) => {
-    n.onmouseenter = () => $map.querySelectorAll(`path[data-shared="${n.dataset.i}"]`).forEach((p) => p.classList.add("hl"));
-    n.onmouseleave = () => $map.querySelectorAll("path.hl").forEach((p) => p.classList.remove("hl"));
-  });
-
   apply();
-  if (resizeObs) resizeObs.disconnect();
-  resizeObs = new ResizeObserver(() => drawMapLines($map));
-  resizeObs.observe($map);
 }
 
 // 요점 하나를 고치는 칸: 이름·설명·영역(내 생각만/겹치는 생각/AI만)·같음/비슷함, 삭제
-function openNodeEditor(ctx, $anchor, side, index) {
+function openNodeEditor(ctx, $anchor, side, index, turnIds = []) {
   document.querySelectorAll(".node-editor").forEach((f) => f.remove());
   document.querySelectorAll(".node.editing-hidden").forEach((n) => n.classList.remove("editing-hidden"));
   const isNew = index < 0;
-  const p = isNew ? { label: "", detail: "", kind: "same", turn_ids: [] } : ctx.data[MM_KEYS[side]][index];
+  const p = isNew ? { label: "", detail: "", kind: "same", turn_ids: turnIds } : ctx.data[MM_KEYS[side]][index];
   const form = document.createElement("form");
   form.className = `node-editor ${side}`;
   form.innerHTML = `
@@ -1436,7 +1407,6 @@ function openNodeEditor(ctx, $anchor, side, index) {
     if (await saveMap(ctx, next)) toast(isNew ? "요점을 추가했어요" : "고쳤어요");
   };
   form.label.focus();
-  drawMapLines(document.getElementById("cmap"));
 }
 
 // 마인드맵 보기 설정은 주제마다 이 브라우저에 기억해 둔다 (없거나 못 읽어도 기본값으로 동작)
@@ -1449,44 +1419,6 @@ function loadMapView(topicId) {
 }
 function saveMapView(topicId, view) {
   try { localStorage.setItem(`tf-map-view-${topicId}`, JSON.stringify(view)); } catch { /* 저장 못 해도 괜찮음 */ }
-}
-
-function drawMapLines($map) {
-  const svg = $map.querySelector(".cmap-lines");
-  if (!svg || getComputedStyle(svg).display === "none") return;
-  const base = $map.getBoundingClientRect();
-  const box = (el) => {
-    const r = el.getBoundingClientRect();
-    return { l: r.left - base.left, r: r.right - base.left, t: r.top - base.top, b: r.bottom - base.top, cy: r.top - base.top + r.height / 2 };
-  };
-  svg.setAttribute("width", base.width);
-  svg.setAttribute("height", base.height);
-  const hm = box($map.querySelector(".cmap-head.mine"));
-  const ha = box($map.querySelector(".cmap-head.ai"));
-  let d = "";
-
-  // 내 생각 → 나만의 관점 (왼쪽 가장자리를 따라 내려가는 가지)
-  $map.querySelectorAll(".node.mine:not([hidden]):not(.editing-hidden)").forEach((n) => {
-    const b = box(n), x = hm.l + 14;
-    d += `<path class="b-mine" d="M${x},${hm.b} C${x},${b.cy} ${x},${b.cy} ${b.l},${b.cy}"/>`;
-  });
-  // AI 생각 → AI만의 관점 (오른쪽 가장자리)
-  $map.querySelectorAll(".node.ai:not([hidden]):not(.editing-hidden)").forEach((n) => {
-    const b = box(n), x = ha.r - 14;
-    d += `<path class="b-ai" d="M${x},${ha.b} C${x},${b.cy} ${x},${b.cy} ${b.r},${b.cy}"/>`;
-  });
-  // 양쪽 머리에서 가운데 겹치는 생각으로 모이는 선:
-  // 머리 높이로 칸 사이 빈 공간까지 간 뒤, 그 공간을 따라 내려가 가운데 요점에 닿는다 (요점 카드를 가로지르지 않게)
-  const colMine = box($map.querySelector(".cmap-col.mine"));
-  const colShared = box($map.querySelector(".cmap-col.shared"));
-  const colAi = box($map.querySelector(".cmap-col.ai"));
-  const gl = (colMine.r + colShared.l) / 2, gr = (colShared.r + colAi.l) / 2, rr = 12;
-  $map.querySelectorAll(".node.shared:not([hidden]):not(.editing-hidden)").forEach((n) => {
-    const b = box(n), kind = n.classList.contains("similar") ? "similar" : "same", i = n.dataset.i;
-    d += `<path class="b-shared ${kind}" data-shared="${i}" d="M${hm.r},${hm.cy} L${gl - rr},${hm.cy} Q${gl},${hm.cy} ${gl},${hm.cy + rr} L${gl},${b.cy - rr} Q${gl},${b.cy} ${gl + rr},${b.cy} L${b.l},${b.cy}"/>`;
-    d += `<path class="b-shared ${kind}" data-shared="${i}" d="M${ha.l},${ha.cy} L${gr + rr},${ha.cy} Q${gr},${ha.cy} ${gr},${ha.cy + rr} L${gr},${b.cy - rr} Q${gr},${b.cy} ${gr - rr},${b.cy} L${b.r},${b.cy}"/>`;
-  });
-  svg.innerHTML = d;
 }
 
 // ---------- 로그인 · 회원가입 (브랜드 소개와 함께) ----------
