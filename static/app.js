@@ -319,7 +319,7 @@ async function loadTopicRows() {
       <a class="topic-link" href="#/topic/${t.id}">
         <div class="topic-main">
           <div class="topic-name">${esc(t.name)}</div>
-          <div class="topic-meta">${state.folder === "all" && t.folder_id != null ? `<span class="meta-folder">${esc(folderName[t.folder_id] || "")}</span> · ` : ""}대화 ${t.turn_count}개 · ${fmtDate(t.updated_at, false)}${t.last_question ? ` · ${esc(t.last_question)}` : ""}</div>
+          <div class="topic-meta">${state.folder === "all" && t.folder_id != null ? `<span class="meta-folder">${esc(folderName[t.folder_id] || "")}</span> · ` : ""}대화 ${t.turn_count}개${t.open_notes ? ` · 메모 ${t.open_notes}` : ""} · ${fmtDate(t.updated_at, false)}${t.last_question ? ` · ${esc(t.last_question)}` : ""}</div>
         </div>
         ${statusBadge(t.status)}
       </a>
@@ -408,6 +408,8 @@ async function viewTopic(id, tab, opts = {}) {
   try { data = await api(`/api/topics/${id}`); }
   catch (err) { $app.innerHTML = `<div class="narrow"><a class="back" href="#/">← 주제 목록</a><div class="empty">${esc(err.message)}</div></div>`; return; }
   const { topic, turns } = data;
+  chatCtx.topic = topic; chatCtx.turns = turns; chatCtx.notes = data.notes || [];
+  chatCtx.filter = "all"; chatCtx.adding = false; chatCtx.open = false;
 
   $app.innerHTML = `
     <header class="topic-head">
@@ -418,6 +420,7 @@ async function viewTopic(id, tab, opts = {}) {
           <div class="topic-actions">
             ${starBtn(topic.is_starred, topic.name)}
             <button class="status status-toggle" id="status-btn"></button>
+            ${tab === "chat" ? `<button class="btn btn-sm notes-toggle" id="notes-toggle" title="메모함 열기">메모함 <span data-notes-count>0</span></button>` : ""}
             <button class="btn btn-ghost danger btn-sm" id="del-topic" title="주제 삭제">삭제</button>
             <span class="top-sep" aria-hidden="true"></span>
             ${themeToggle()}
@@ -472,6 +475,188 @@ function bindTopicStar(id, topic) {
   };
 }
 
+// ---------- 메모함: AI 답에서 새는 것들을 붙잡아 두는 곳 ----------
+// 대화는 한 방향으로 이어 가고, AI가 말한 것 중 지금 따라가면 새는 것(모르는 것·나중에 물어볼 것·체크할 것)은
+// 드래그해서 여기에 담아 두고 우선순위와 완료로 관리한다.
+const NOTE_KINDS = { unknown: "모르는 것", later: "나중에 물어볼 것", check: "체크할 것" };
+const PRIORITY = { high: "높음", mid: "보통", low: "낮음" };
+const PRIORITY_ORDER = { high: 0, mid: 1, low: 2 };
+const chatCtx = { topic: null, turns: [], notes: [], filter: "all", adding: false, open: false };
+
+function openNoteCount() { return chatCtx.notes.filter((n) => !n.done).length; }
+
+function updateNoteBadges() {
+  const n = openNoteCount();
+  document.querySelectorAll("[data-notes-count]").forEach((el) => (el.textContent = n));
+}
+
+function renderNotes() {
+  const $p = document.getElementById("notes-panel");
+  if (!$p) return;
+  const { notes, filter, turns } = chatCtx;
+  const turnNo = Object.fromEntries(turns.map((t, i) => [t.id, i + 1]));
+  const count = (k) => notes.filter((n) => !n.done && (k === "all" || n.kind === k)).length;
+  const list = notes
+    .filter((n) => filter === "all" || n.kind === filter)
+    .sort((a, b) => a.done - b.done || PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] || a.id - b.id);
+  const chip = (k, label) =>
+    `<button class="nf ${filter === k ? "active" : ""}" data-nf="${k}">${label} <span>${count(k)}</span></button>`;
+
+  $p.innerHTML = `
+    <div class="np-head">
+      <h2>메모함 <span class="np-count" data-notes-count>${openNoteCount()}</span></h2>
+      <button class="btn btn-ghost btn-sm np-close" data-np-close aria-label="메모함 닫기">닫기</button>
+    </div>
+    <p class="np-help">AI 답에서 지금 따라가면 대화가 새는 내용은 <b>문장을 드래그</b>해서 여기에 담아 두세요. 대화는 한 방향으로 이어 가요.</p>
+    <div class="np-filters">${chip("all", "전체")}${Object.entries(NOTE_KINDS).map(([k, v]) => chip(k, v)).join("")}</div>
+    ${chatCtx.adding ? `
+      <form class="np-add" id="np-add">
+        <select name="kind" aria-label="종류">${Object.entries(NOTE_KINDS).map(([k, v]) => `<option value="${k}" ${filter === k ? "selected" : ""}>${v}</option>`).join("")}</select>
+        <select name="priority" aria-label="우선순위">${Object.entries(PRIORITY).map(([k, v]) => `<option value="${k}" ${k === "mid" ? "selected" : ""}>우선순위 ${v}</option>`).join("")}</select>
+        <textarea name="text" rows="2" maxlength="500" placeholder="메모할 내용" aria-label="메모할 내용"></textarea>
+        <div class="np-add-btns"><button type="button" class="btn btn-ghost btn-sm" data-np-cancel>취소</button><button class="btn btn-primary btn-sm">담기</button></div>
+      </form>` : `<button class="np-add-btn" data-np-add>+ 직접 적기</button>`}
+    <ul class="np-list">
+      ${list.length ? list.map((n) => `
+        <li class="note ${n.kind} ${n.done ? "done" : ""}" data-note="${n.id}">
+          <div class="note-top">
+            <label class="note-check"><input type="checkbox" ${n.done ? "checked" : ""} data-n-done aria-label="완료"></label>
+            <span class="note-kind">${NOTE_KINDS[n.kind]}</span>
+            <button class="note-pri ${n.priority}" data-n-pri title="눌러서 우선순위 바꾸기">${PRIORITY[n.priority]}</button>
+            <button class="note-x" data-n-del aria-label="메모 지우기">×</button>
+          </div>
+          <p class="note-text">${esc(n.text)}</p>
+          ${n.note ? `<p class="note-my">${esc(n.note)}</p>` : ""}
+          <div class="note-foot">
+            ${n.turn_id && turnNo[n.turn_id] ? `<button class="turn-chip" data-n-jump="${n.turn_id}">대화 ${turnNo[n.turn_id]}</button>` : ""}
+            <button class="note-link" data-n-note>${n.note ? "메모 고치기" : "메모 달기"}</button>
+            ${n.kind === "later" && !n.done ? `<button class="note-link strong" data-n-ask>지금 물어보기 →</button>` : ""}
+          </div>
+        </li>`).join("") : `<li class="np-empty">${notes.length ? "이 종류의 메모는 없어요." : "아직 담은 메모가 없어요.<br>AI 답에서 모르는 말이나 나중에 물어볼 것을 드래그해 보세요."}</li>`}
+    </ul>`;
+  updateNoteBadges();
+}
+
+async function saveNote(id, body) {
+  const updated = await api(`/api/notes/${id}`, { method: "PATCH", body });
+  chatCtx.notes = chatCtx.notes.map((n) => (n.id === id ? updated : n));
+  renderNotes();
+}
+
+async function addNote(body) {
+  const created = await api(`/api/topics/${chatCtx.topic.id}/notes`, { method: "POST", body });
+  chatCtx.notes.push(created);
+  chatCtx.filter = chatCtx.filter === "all" || chatCtx.filter === created.kind ? chatCtx.filter : "all";
+  renderNotes();
+  document.querySelector(`[data-note="${created.id}"]`)?.classList.add("just-added");
+  return created;
+}
+
+function bindNotesPanel() {
+  const $p = document.getElementById("notes-panel");
+  $p.onclick = async (e) => {
+    const el = e.target;
+    const card = el.closest("[data-note]");
+    const id = card ? Number(card.dataset.note) : null;
+    const note = id ? chatCtx.notes.find((n) => n.id === id) : null;
+    try {
+      if (el.closest("[data-nf]")) { chatCtx.filter = el.closest("[data-nf]").dataset.nf; renderNotes(); }
+      else if (el.closest("[data-np-add]")) { chatCtx.adding = true; renderNotes(); $p.querySelector("#np-add textarea").focus(); }
+      else if (el.closest("[data-np-cancel]")) { chatCtx.adding = false; renderNotes(); }
+      else if (el.closest("[data-np-close]")) { toggleNotes(false); }
+      else if (el.closest("[data-n-pri]")) {
+        const next = { high: "mid", mid: "low", low: "high" }[note.priority];
+        await saveNote(id, { priority: next });
+      }
+      else if (el.closest("[data-n-del]")) {
+        if (await ask({ title: "이 메모를 지울까요?", message: note.text.slice(0, 80), confirmText: "지우기", danger: true })) {
+          await api(`/api/notes/${id}`, { method: "DELETE" });
+          chatCtx.notes = chatCtx.notes.filter((n) => n.id !== id);
+          renderNotes();
+        }
+      }
+      else if (el.closest("[data-n-note]")) {
+        const v = await ask({ title: note.note ? "메모 고치기" : "메모 달기", message: note.text.slice(0, 120), input: { value: note.note, maxlength: 500, placeholder: "왜 담았는지, 언제 볼지 등" }, confirmText: "저장" });
+        if (v !== null) await saveNote(id, { note: v });
+      }
+      else if (el.closest("[data-n-jump]")) { jumpToTurn(Number(el.closest("[data-n-jump]").dataset.nJump)); toggleNotes(false); }
+      else if (el.closest("[data-n-ask]")) {
+        // 나중에 물어볼 것 → 입력창에 질문으로 옮기고, 물어보면 완료로
+        const { topic, turns } = chatCtx;
+        state.drafts[topic.id] = { step: 1, question: note.text, thought: "", files: [], fromNote: id };
+        renderComposer(topic, turns);
+        toggleNotes(false);
+        const $q = document.getElementById("c-question");
+        $q.focus(); $q.setSelectionRange($q.value.length, $q.value.length);
+        $q.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    } catch (err) { toast(err.message); }
+  };
+  $p.onchange = async (e) => {
+    if (!e.target.matches("[data-n-done]")) return;
+    const id = Number(e.target.closest("[data-note]").dataset.note);
+    try { await saveNote(id, { done: e.target.checked }); } catch (err) { toast(err.message); }
+  };
+  $p.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const text = f.text.value.trim();
+    if (!text) { f.text.focus(); return; }
+    try { chatCtx.adding = false; await addNote({ kind: f.kind.value, priority: f.priority.value, text }); toast("메모함에 담았어요"); }
+    catch (err) { toast(err.message); }
+  };
+}
+
+function toggleNotes(open) {
+  chatCtx.open = open ?? !chatCtx.open;
+  document.querySelector(".chat-wrap")?.classList.toggle("notes-open", chatCtx.open);
+}
+
+// AI 답에서 문장을 드래그하면 뜨는 작은 메뉴
+function setupSelectionCapture() {
+  let $pop = document.getElementById("sel-pop");
+  if (!$pop) {
+    $pop = document.createElement("div");
+    $pop.id = "sel-pop";
+    $pop.className = "sel-pop";
+    $pop.setAttribute("role", "toolbar");
+    $pop.setAttribute("aria-label", "메모함에 담기");
+    $pop.innerHTML = Object.entries(NOTE_KINDS).map(([k, v]) => `<button data-sel-kind="${k}">${v}</button>`).join("");
+    document.body.appendChild($pop);
+    // 버튼을 누를 때 선택이 풀리지 않게
+    $pop.addEventListener("mousedown", (e) => e.preventDefault());
+    $pop.addEventListener("click", async (e) => {
+      const b = e.target.closest("[data-sel-kind]");
+      if (!b || !$pop.dataset.text) return;
+      try {
+        await addNote({ kind: b.dataset.selKind, text: $pop.dataset.text, turn_id: Number($pop.dataset.turn) || null });
+        toast(`'${NOTE_KINDS[b.dataset.selKind]}'(으)로 메모함에 담았어요`);
+      } catch (err) { toast(err.message); }
+      window.getSelection()?.removeAllRanges();
+      $pop.hidden = true;
+    });
+  }
+  $pop.hidden = true;
+  const check = () => {
+    const sel = window.getSelection();
+    const text = sel ? sel.toString().replace(/\s+/g, " ").trim() : "";
+    const anchor = sel && sel.rangeCount ? sel.getRangeAt(0).commonAncestorContainer : null;
+    const answer = anchor && (anchor.nodeType === 1 ? anchor : anchor.parentElement)?.closest(".block.ai .md");
+    if (!text || text.length < 2 || !answer || !document.getElementById("notes-panel")) { $pop.hidden = true; return; }
+    const r = sel.getRangeAt(0).getBoundingClientRect();
+    $pop.dataset.text = text.slice(0, 500);
+    $pop.dataset.turn = answer.closest(".turn")?.dataset.id || "";
+    $pop.hidden = false;
+    const w = $pop.offsetWidth;
+    $pop.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, r.left + r.width / 2 - w / 2))}px`;
+    $pop.style.top = `${Math.max(8, r.top - $pop.offsetHeight - 8)}px`;
+  };
+  document.onmouseup = () => setTimeout(check, 0);
+  document.ontouchend = () => setTimeout(check, 250);
+  document.onselectionchange = () => { const s = window.getSelection(); if (!s || s.isCollapsed) $pop.hidden = true; };
+  window.addEventListener("scroll", () => { $pop.hidden = true; }, { passive: true });
+}
+
 // ---------- 대화 탭 ----------
 function turnHTML(t, n) {
   return `
@@ -498,6 +683,7 @@ function turnHTML(t, n) {
 
 function renderChatTab($panel, topic, turns, opts) {
   $panel.innerHTML = `
+   <div class="chat-wrap">
     <div class="chat">
       <div id="turns">${turns.length ? turns.map((t, i) => turnHTML(t, i + 1)).join("") : `
         <div class="chat-start">
@@ -510,10 +696,16 @@ function renderChatTab($panel, topic, turns, opts) {
           </ol>
         </div>`}</div>
       <div class="composer" id="composer"></div>
-    </div>`;
+    </div>
+    <aside class="notes-panel" id="notes-panel" aria-label="메모함"></aside>
+   </div>`;
 
   turns.forEach((t) => bindTurn(t));
   renderComposer(topic, turns);
+  renderNotes();
+  bindNotesPanel();
+  setupSelectionCapture();
+  document.getElementById("notes-toggle")?.addEventListener("click", () => toggleNotes());
 
   if (opts.ask) {
     const t = turns.find((x) => x.id === opts.ask);
@@ -726,6 +918,7 @@ function renderComposer(topic, turns) {
         try { attachments = await uploadFiles(id, draft.files); }
         catch (err) { toast(`${err.message} 자료 없이 AI 답을 받아요.`); }
       }
+      if (draft.fromNote) saveNote(draft.fromNote, { done: true }).catch(() => {});
       delete state.drafts[topic.id];
       const t = { id, question: draft.question.trim(), my_thought: draft.thought.trim(), ai_answer: null, reflection: null, created_at: new Date().toISOString(), attachments };
       turns.push(t);
@@ -1177,7 +1370,8 @@ function brandPanel() {
       <ol class="brand-steps">
         <li><span class="step-num">01</span><div><b>질문을 적어요</b><p>AI에게 물어보고 싶은 걸 먼저 적어요.</p></div></li>
         <li><span class="step-num">02</span><div><b>내 생각을 먼저 써요</b><p>20자 이상 써야 AI 답이 열려요. 내 생각은 AI에게 보내지 않아요.</p></div></li>
-        <li><span class="step-num">03</span><div><b>AI 답과 비교해요</b><p>겹치는 생각, 나만의 관점, AI만의 관점을 마인드맵으로 나눠 봐요.</p></div></li>
+        <li><span class="step-num">03</span><div><b>새는 건 메모함에</b><p>AI 답에서 모르는 말, 나중에 물어볼 것은 드래그해서 담아 두고 대화는 한 방향으로 이어 가요.</p></div></li>
+        <li><span class="step-num">04</span><div><b>마인드맵으로 정리돼요</b><p>나만의 관점, 겹치는 생각, AI만의 관점이 나뉘고, 누르면 그 대화로 이동해요.</p></div></li>
       </ol>
     </section>`;
 }

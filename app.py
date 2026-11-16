@@ -130,6 +130,20 @@ def init_db():
                 gender TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS side_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+                turn_id INTEGER REFERENCES turns(id) ON DELETE SET NULL,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                text TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                priority TEXT NOT NULL DEFAULT 'mid',
+                done INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_side_notes_topic ON side_notes(topic_id);
             CREATE TABLE IF NOT EXISTS attachments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 turn_id INTEGER NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
@@ -671,6 +685,7 @@ def attachment_blocks(db, turn_id):
 TOPIC_SELECT = """
     SELECT t.id, t.name, t.folder_id, t.is_starred, t.status, t.created_at, t.updated_at,
            COUNT(u.id) AS turn_count,
+           (SELECT COUNT(*) FROM side_notes n WHERE n.topic_id = t.id AND n.done = 0) AS open_notes,
            (SELECT question FROM turns WHERE topic_id = t.id ORDER BY id DESC LIMIT 1) AS last_question
     FROM topics t LEFT JOIN turns u ON u.topic_id = t.id
 """
@@ -685,8 +700,9 @@ def list_topics():
         like = f"%{q}%"
         sql += """ AND (t.name LIKE ? OR t.id IN (
                      SELECT topic_id FROM turns
-                     WHERE question LIKE ? OR my_thought LIKE ? OR ai_answer LIKE ? OR reflection LIKE ?))"""
-        params += [like] * 5
+                     WHERE question LIKE ? OR my_thought LIKE ? OR ai_answer LIKE ? OR reflection LIKE ?)
+                   OR t.id IN (SELECT topic_id FROM side_notes WHERE text LIKE ? OR note LIKE ?))"""
+        params += [like] * 7
     # 중요 표시한 주제를 먼저, 그다음 최근에 대화한 순서
     sql += " GROUP BY t.id ORDER BY t.is_starred DESC, t.updated_at DESC"
     return jsonify([dict(r) for r in get_db().execute(sql, params).fetchall()])
@@ -727,7 +743,9 @@ def get_topic(topic_id):
     atts = attachments_of(db, [t["id"] for t in turns])
     for t in turns:
         t["attachments"] = atts.get(t["id"], [])
-    return jsonify(topic=dict(topic), turns=turns)
+    notes = [dict(r) for r in db.execute(
+        "SELECT id, turn_id, kind, text, note, priority, done, created_at FROM side_notes WHERE topic_id = ? ORDER BY id", (topic_id,))]
+    return jsonify(topic=dict(topic), turns=turns, notes=notes)
 
 
 @app.patch("/api/topics/<int:topic_id>")
@@ -767,6 +785,90 @@ def delete_topic(topic_id):
         (topic_id, current_user_id()),
     ).fetchall())
     db.execute("DELETE FROM topics WHERE id = ? AND user_id = ?", (topic_id, current_user_id()))
+    db.commit()
+    return jsonify(ok=True)
+
+
+# ---------- 메모함 ----------
+# AI 답에서 지금 따라가면 대화가 새는 것들을 붙잡아 두는 곳:
+# 모르는 것(unknown) / 나중에 물어볼 것(later) / 체크할 것(check) + 우선순위 + 완료
+NOTE_KINDS = ("unknown", "later", "check")
+PRIORITIES = ("high", "mid", "low")
+
+
+def note_fields(d, partial=False):
+    out = {}
+    if "kind" in d or not partial:
+        if d.get("kind") not in NOTE_KINDS:
+            raise ValueError("메모 종류를 골라 주세요.")
+        out["kind"] = d["kind"]
+    if "text" in d or not partial:
+        text = str(d.get("text", "")).strip()
+        if not text:
+            raise ValueError("메모할 내용을 적어 주세요.")
+        out["text"] = text[:500]
+    if "note" in d:
+        out["note"] = str(d.get("note") or "").strip()[:500]
+    if "priority" in d:
+        if d["priority"] not in PRIORITIES:
+            raise ValueError("우선순위가 올바르지 않아요.")
+        out["priority"] = d["priority"]
+    if "done" in d:
+        out["done"] = 1 if d["done"] else 0
+    return out
+
+
+def own_note(db, note_id):
+    return db.execute("SELECT * FROM side_notes WHERE id = ? AND user_id = ?", (note_id, current_user_id())).fetchone()
+
+
+@app.post("/api/topics/<int:topic_id>/notes")
+@login_required
+def create_note(topic_id):
+    db = get_db()
+    if not own_topic(db, topic_id):
+        return jsonify(error="주제를 찾을 수 없어요."), 404
+    d = request.json or {}
+    try:
+        f = note_fields(d)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    turn_id = d.get("turn_id")
+    if turn_id is not None and not db.execute("SELECT 1 FROM turns WHERE id = ? AND topic_id = ?", (turn_id, topic_id)).fetchone():
+        turn_id = None
+    ts = now()
+    cur = db.execute(
+        "INSERT INTO side_notes (topic_id, turn_id, user_id, kind, text, note, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (topic_id, turn_id, current_user_id(), f["kind"], f["text"], f.get("note", ""), f.get("priority", "mid"), ts, ts),
+    )
+    db.commit()
+    return jsonify(dict(db.execute("SELECT id, turn_id, kind, text, note, priority, done, created_at FROM side_notes WHERE id = ?", (cur.lastrowid,)).fetchone())), 201
+
+
+@app.patch("/api/notes/<int:note_id>")
+@login_required
+def update_note(note_id):
+    db = get_db()
+    if not own_note(db, note_id):
+        return jsonify(error="메모를 찾을 수 없어요."), 404
+    try:
+        f = note_fields(request.json or {}, partial=True)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    if f:
+        sets = ", ".join(f"{k} = ?" for k in f)
+        db.execute(f"UPDATE side_notes SET {sets}, updated_at = ? WHERE id = ?", (*f.values(), now(), note_id))
+        db.commit()
+    return jsonify(dict(db.execute("SELECT id, turn_id, kind, text, note, priority, done, created_at FROM side_notes WHERE id = ?", (note_id,)).fetchone()))
+
+
+@app.delete("/api/notes/<int:note_id>")
+@login_required
+def delete_note(note_id):
+    db = get_db()
+    if not own_note(db, note_id):
+        return jsonify(error="메모를 찾을 수 없어요."), 404
+    db.execute("DELETE FROM side_notes WHERE id = ?", (note_id,))
     db.commit()
     return jsonify(ok=True)
 
