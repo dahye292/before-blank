@@ -19,7 +19,17 @@ from dotenv import load_dotenv
 from flask import Flask, Response, g, jsonify, request, send_from_directory
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = Path(os.environ.get("THINKFIRST_DB", BASE_DIR / "data" / "thinkfirst.db"))
+def _arg(name, default=None):
+    """--name=값 형태의 실행 옵션을 읽는다 (예: python app.py --db=data/demo.db --port=5051)"""
+    for a in sys.argv[1:]:
+        if a.startswith(f"--{name}="):
+            return a.split("=", 1)[1]
+    return default
+
+
+DB_PATH = Path(_arg("db") or os.environ.get("THINKFIRST_DB") or BASE_DIR / "data" / "thinkfirst.db")
+if not DB_PATH.is_absolute():
+    DB_PATH = BASE_DIR / DB_PATH
 MODEL = "claude-opus-5-5"
 MIN_THOUGHT_LEN = 20  # 내 생각을 최소 이만큼은 써야 AI 답을 볼 수 있다
 
@@ -519,4 +529,4 @@ init_db()
 
 if __name__ == "__main__":
     # 개발할 때만 FLASK_DEBUG=1 로 디버그 모드를 켠다 (배포 시 디버그 모드 금지)
-    app.run(port=int(os.environ.get("PORT", 5050)), debug=os.environ.get("FLASK_DEBUG") == "1", threaded=True)
+    app.run(port=int(_arg("port") or os.environ.get("PORT", 5050)), debug=os.environ.get("FLASK_DEBUG") == "1", threaded=True)
