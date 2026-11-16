@@ -1159,25 +1159,20 @@ function drawMapLines($map) {
 // ---------- 로그인 · 회원가입 (브랜드 소개와 함께) ----------
 // 누구를 위한 앱인지, 왜 만들었는지를 로그인 화면 왼쪽에 보여 준다
 function brandPanel() {
-  const mascot = document.getElementById("mascot-template").innerHTML;
   return `
     <section class="brand">
-      <div class="brand-mark">${LOGO}<span class="brand-name"><b>비포블랭크</b> Before Blank</span></div>
-      <h1 class="brand-title">AI에게 묻기 전에,<br>내 생각부터.</h1>
+      <div class="brand-logo">${LOGO}</div>
+      <h1 class="brand-title">비포블랭크</h1>
+      <p class="brand-en">Before Blank</p>
 
       <div class="brand-block">
-        <h2>이런 분을 위해 만들었어요</h2>
+        <h2>이런 분을 위한 노트예요</h2>
         <ul class="brand-list">
-          <li>AI 답을 읽고 나면, 내가 원래 뭘 생각했는지 기억나지 않는 사람</li>
-          <li>AI에게 묻기는 하는데, 정작 내 생각은 정리가 안 되는 사람</li>
-          <li>AI 답을 그대로 가져다 쓰고 나서 어딘가 찜찜했던 사람</li>
+          <li>AI 답을 읽고 나면, 원래 하던 생각이 떠오르지 않는 분</li>
+          <li>AI에게 묻기는 하지만, 내 생각은 잘 정리되지 않는 분</li>
+          <li>어느새 AI의 말을 그대로 따라가고 있다고 느낀 분</li>
         </ul>
       </div>
-
-      <figure class="brand-story">
-        <blockquote>AI를 쓰고 나면 하고 있던 내 생각은 잊어버리고, 어느새 AI의 말을 따라가고 있었어요. 그 불편함에서 이 노트를 만들었습니다.</blockquote>
-        <figcaption>만든 사람의 이야기</figcaption>
-      </figure>
 
       <ol class="brand-steps">
         <li><span class="step-num">01</span><div><b>질문을 적어요</b><p>AI에게 물어보고 싶은 걸 먼저 적어요.</p></div></li>

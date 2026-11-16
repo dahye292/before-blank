@@ -712,3 +712,15 @@ a.file-chip:hover { border-color: var(--quiet); color: var(--text); }
 /* 홈 인사말: 큰 '주제' 대신 작은 인사 */
 .home-hero h1.greeting { font-size: 24px; font-weight: 600; letter-spacing: -0.03em; margin-top: 10px; }
 @media (max-width: 760px) { .home-hero h1.greeting { font-size: 21px; } }
+
+/* 로그인 화면 제목: 이름만 크게 */
+.brand-logo .logo { width: 44px; height: 44px; border-radius: 11px; }
+.brand .brand-title { margin: 22px 0 0; font-size: 56px; line-height: 1.05; font-weight: 700; letter-spacing: -0.04em; }
+.brand-en { margin: 8px 0 44px; font-size: 16px; color: var(--muted); letter-spacing: 0.02em; }
+@media (max-width: 760px) {
+  .brand-logo .logo { width: 38px; height: 38px; border-radius: 10px; }
+  .brand .brand-title { font-size: 42px; margin-top: 16px; }
+  .brand-en { margin-bottom: 30px; font-size: 15px; }
+}
+
+.brand-steps { margin-top: 36px; }
