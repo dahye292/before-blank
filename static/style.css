@@ -1353,3 +1353,60 @@ input[type=text], input[type=search], textarea { font-size: var(--fs-body); padd
 .mm .node-editor input, .mm .node-editor textarea, .mm .node-editor select { min-width: 0; max-width: 100%; }
 .mm .node-editor .ed-row { flex-wrap: wrap; }
 @media (max-width: 760px) { .mm-head, .mm-row { grid-template-columns: 1fr; } }
+
+
+/* ============================================================
+   사용 통계 (주인 계정만): 숫자 타일 중심, 막대는 브랜드 갈색 한 색 + 값은 늘 글자로
+   ============================================================ */
+.stats { max-width: 960px; margin: 0 auto; padding: var(--sp-5) var(--sp-4) 96px; }
+.st-head { display: flex; justify-content: space-between; align-items: flex-end; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-4); }
+.st-head .page-title { display: flex; align-items: center; gap: var(--sp-1); margin-bottom: 0; }
+.st-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--muted); cursor: pointer; }
+.st-toggle input { accent-color: var(--brand); }
+.st-sec { padding: var(--sp-4) 0; border-top: 1px solid var(--hairline); }
+.st-sec:first-child { border-top: none; padding-top: 0; }
+.st-title { display: flex; align-items: center; gap: var(--sp-1); margin: 0 0 var(--sp-3); font-family: var(--serif); font-size: var(--fs-card); font-weight: 700; }
+.st-sub-title { margin: 0 0 var(--sp-2); font-size: var(--fs-sm); font-weight: 600; color: var(--muted); }
+.st-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--sp-2); }
+.st-grid.two { grid-template-columns: 1fr 1fr; align-content: start; }
+.st-tile { display: grid; gap: 4px; padding: var(--sp-3); border: 1px solid var(--hairline); border-radius: var(--r-card); background: var(--surface); }
+.st-label { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--muted); }
+.st-value { font-size: 28px; line-height: 36px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.st-sub { font-size: var(--fs-xs); color: var(--quiet); }
+.st-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--sp-2); }
+.st-card { padding: var(--sp-3); border: 1px solid var(--hairline); border-radius: var(--r-card); background: var(--surface); min-width: 0; }
+.st-note { margin: 0; font-size: var(--fs-sm); color: var(--muted); }
+
+/* 가로 막대 */
+.hb { display: grid; gap: var(--sp-1); }
+.hb-row { display: grid; grid-template-columns: 96px minmax(0, 1fr) 72px; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); }
+.hb-label { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hb-track { height: 12px; }
+.hb-track i { display: block; height: 100%; background: var(--brand); border-radius: 0 4px 4px 0; }
+.hb-val { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+.hb-val .muted { color: var(--quiet); font-size: var(--fs-xs); }
+
+/* 세로 막대 (14일) */
+.vb-grid { display: grid; grid-template-columns: repeat(14, 1fr); gap: 4px; height: 140px; align-items: end; border-bottom: 1px solid var(--hairline-strong); }
+.vb-col { height: 100%; display: flex; align-items: flex-end; cursor: default; }
+.vb-col i { display: block; width: 100%; background: var(--brand); border-radius: 4px 4px 0 0; }
+.vb-col:hover i { background: var(--brand-hover); }
+.vb-col[data-tip]:hover::after { left: 50%; transform: translateX(-50%); top: auto; bottom: calc(100% + 6px); }
+.vb-axis { display: flex; justify-content: space-between; margin-top: 6px; font-size: var(--fs-xs); color: var(--quiet); }
+.vb-table { margin-top: var(--sp-2); font-size: var(--fs-sm); color: var(--muted); }
+.vb-table summary { cursor: pointer; }
+.vb-table table { margin-top: var(--sp-1); border-collapse: collapse; }
+.vb-table th, .vb-table td { padding: 2px var(--sp-2) 2px 0; text-align: left; font-weight: 400; }
+.vb-table th { color: var(--quiet); }
+
+@media (max-width: 760px) {
+  .stats { padding: var(--sp-3) var(--sp-3) 80px; }
+  .st-split, .st-grid.two { grid-template-columns: 1fr; }
+  .st-value { font-size: 24px; line-height: 32px; }
+  .hb-row { grid-template-columns: 80px minmax(0, 1fr) 64px; }
+}
+@media (max-width: 760px) {
+  .st-grid, .st-grid.two { grid-template-columns: 1fr 1fr; gap: var(--sp-1); }
+  .st-tile { padding: var(--sp-2); }
+  .st-value { font-size: 22px; line-height: 30px; }
+}

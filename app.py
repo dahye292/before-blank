@@ -390,7 +390,8 @@ def protect_api():
 
 
 def user_json(row):
-    return {"id": row["id"], "name": row["name"], "email": row["email"], "ai": ai_status(row)}
+    return {"id": row["id"], "name": row["name"], "email": row["email"], "ai": ai_status(row),
+            "admin": row["email"].lower() in owner_emails()}
 
 
 # ---------- AI 사용 권한 (내 API 키를 아무나 쓰지 못하게) ----------
@@ -1026,6 +1027,7 @@ def delete_topic(topic_id):
 # AI 답에서 지금 다루지 않을 곁가지를 담아 두는 곳:
 # 확인할 것(check) / 할 일(todo) / 마음에 드는 것(like) + 우선순위 + 완료
 NOTE_KINDS = ("check", "todo", "like")
+NOTE_LABELS = {"check": "확인할 것", "todo": "할 일", "like": "마음에 드는 것"}
 PRIORITIES = ("high", "mid", "low")
 
 
@@ -1534,6 +1536,121 @@ def edit_mindmap(topic_id):
     db.execute("UPDATE topics SET mindmap = ? WHERE id = ?", (json.dumps(data, ensure_ascii=False), topic_id))
     db.commit()
     return jsonify(data)
+
+# ---------- 사용 통계 (주인 계정만) ----------
+# 가입할 때 "개인을 알아볼 수 없는 통계로만" 쓰겠다고 약속했으므로:
+#   - 질문·생각·답·메모의 '내용'은 절대 내보내지 않고 숫자만 계산한다.
+#   - 인원이 적은 묶음(5명 미만)은 숫자 대신 '5명 미만'으로 가린다.
+#   - 가입하면 자동으로 들어가는 예시 주제는 통계에서 뺀다.
+MIN_GROUP = 5
+EXAMPLE_PREFIX = "[예시]"
+
+
+def _median(xs):
+    xs = sorted(xs)
+    if not xs:
+        return None
+    m = len(xs) // 2
+    return xs[m] if len(xs) % 2 else round((xs[m - 1] + xs[m]) / 2)
+
+
+def _ratio(a, b):
+    return round(a / b, 3) if b else None
+
+
+def _hide_small(groups):
+    """{이름: 인원} → [{label, n}] (5명 미만은 n=None)"""
+    return [{"label": k, "n": v if v >= MIN_GROUP else None} for k, v in groups.items()]
+
+
+@app.get("/api/admin/stats")
+@login_required
+def admin_stats():
+    db = get_db()
+    me = db.execute("SELECT email FROM users WHERE id = ?", (current_user_id(),)).fetchone()
+    if not me or me["email"].lower() not in owner_emails():
+        return jsonify(error="찾을 수 없어요."), 404  # 통계 화면이 있다는 것도 알리지 않는다
+    include_owner = request.args.get("include_owner") == "1"
+    owners = owner_emails()
+    users = [u for u in db.execute("SELECT id, email, age, gender, created_at FROM users")
+             if include_owner or u["email"].lower() not in owners]
+    uids = [u["id"] for u in users]
+    now_dt = datetime.now()
+    since = lambda days: (now_dt - timedelta(days=days)).isoformat(timespec="seconds")
+    if not uids:
+        return jsonify(empty=True, include_owner=include_owner)
+    qs = ",".join("?" * len(uids))
+
+    topics = db.execute(
+        f"SELECT id, user_id, status, mindmap FROM topics WHERE user_id IN ({qs}) AND name NOT LIKE ?",
+        (*uids, EXAMPLE_PREFIX + "%")).fetchall()
+    tids = [t["id"] for t in topics] or [-1]
+    tq = ",".join("?" * len(tids))
+    turns = db.execute(
+        f"""SELECT tu.created_at, length(tu.my_thought) AS mine, length(tu.ai_answer) AS ai,
+                   (tu.ai_answer IS NOT NULL) AS answered, (trim(coalesce(tu.reflection, '')) != '') AS reflected,
+                   t.user_id
+            FROM turns tu JOIN topics t ON t.id = tu.topic_id WHERE tu.topic_id IN ({tq})""", tids).fetchall()
+    notes = db.execute(f"SELECT kind, done, topic_id FROM side_notes WHERE topic_id IN ({tq})", tids).fetchall()
+    answered = [r for r in turns if r["answered"]]
+
+    # 마인드맵: 만든 주제, 직접 고친 비율, 겹치는 생각
+    maps = [json.loads(t["mindmap"]) for t in topics if t["mindmap"]]
+    shared = [p for m in maps for p in m.get("shared", [])]
+
+    # 최근 14일 새 대화
+    days = [(now_dt - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(13, -1, -1)]
+    per_day = {d: 0 for d in days}
+    for r in turns:
+        d = (r["created_at"] or "")[:10]
+        if d in per_day:
+            per_day[d] += 1
+
+    # 연령대·성별 (5명 미만 묶음은 가림)
+    bands = {"10대": 0, "20대": 0, "30대": 0, "40대": 0, "50대 이상": 0}
+    for u in users:
+        a = u["age"] or 0
+        key = "10대" if a < 20 else "20대" if a < 30 else "30대" if a < 40 else "40대" if a < 50 else "50대 이상"
+        bands[key] += 1
+    genders = {g: 0 for g in GENDERS}
+    for u in users:
+        if u["gender"] in genders:
+            genders[u["gender"]] += 1
+
+    usage = db.execute(
+        f"SELECT kind, day FROM ai_usage WHERE user_id IN ({qs}) AND day >= ?", (*uids, since(6)[:10])).fetchall()
+    today_s = today()
+    kinds = {"check": 0, "todo": 0, "like": 0}
+    for n in notes:
+        if n["kind"] in kinds:
+            kinds[n["kind"]] += 1
+
+    return jsonify(
+        include_owner=include_owner,
+        min_group=MIN_GROUP,
+        users={"total": len(users), "new_7d": sum(1 for u in users if (u["created_at"] or "") >= since(7)),
+               "active_7d": len({r["user_id"] for r in turns if (r["created_at"] or "") >= since(7)})},
+        topics={"total": len(topics), "done": sum(1 for t in topics if t["status"] == "done"),
+                "avg_turns": round(len(turns) / len(topics), 1) if topics else None},
+        turns={"total": len(turns), "answered": len(answered),
+               "thought_avg": round(sum(r["mine"] or 0 for r in answered) / len(answered)) if answered else None,
+               "thought_median": _median([r["mine"] or 0 for r in answered]),
+               "thought_vs_ai": _ratio(sum(r["mine"] or 0 for r in answered), sum(r["ai"] or 0 for r in answered)),
+               "reflection_rate": _ratio(sum(1 for r in answered if r["reflected"]), len(answered))},
+        notes={"total": len(notes), "done_rate": _ratio(sum(1 for n in notes if n["done"]), len(notes)),
+               "topic_rate": _ratio(len({n["topic_id"] for n in notes}), len(topics)),
+               "kinds": [{"label": NOTE_LABELS[k], "n": v} for k, v in kinds.items()]},
+        mindmap={"maps": len(maps), "edited_rate": _ratio(sum(1 for m in maps if m.get("edited")), len(maps)),
+                 "shared_avg": round(len(shared) / len(maps), 1) if maps else None,
+                 "same": sum(1 for p in shared if p.get("kind") != "similar"),
+                 "similar": sum(1 for p in shared if p.get("kind") == "similar")},
+        daily=[{"day": d, "n": per_day[d]} for d in days],
+        ages=_hide_small(bands) if len(users) >= MIN_GROUP else None,
+        genders=_hide_small(genders) if len(users) >= MIN_GROUP else None,
+        ai={"today": sum(1 for u in usage if u["day"] == today_s),
+            "week_answer": sum(1 for u in usage if u["kind"] == "answer"),
+            "week_mindmap": sum(1 for u in usage if u["kind"] == "mindmap")},
+    )
 
 
 @app.get("/api/config")

@@ -213,6 +213,7 @@ function topBar() {
             <span class="avatar" aria-hidden="true">${esc(name.slice(0, 1))}</span><span class="profile-name">${esc(name)}</span><span class="caret" aria-hidden="true">▾</span>
           </button>
           <div class="profile-menu" id="profile-menu" role="menu" hidden>
+            ${state.user?.admin ? `<a role="menuitem" href="#/stats">사용 통계</a>` : ""}
             <a role="menuitem" href="#/settings">설정</a>
             <button role="menuitem" id="logout">로그아웃</button>
           </div>
@@ -410,6 +411,137 @@ async function loadTopicRows() {
       } catch (err) { toast(err.message); loadTopicRows(); }
     };
   });
+}
+
+// ---------- 사용 통계 (주인 계정만) ----------
+// 숫자만 본다. 질문·생각·답·메모의 내용은 서버가 아예 보내지 않고, 5명 미만 묶음은 가린다.
+const pct = (r) => (r == null ? "–" : `${Math.round(r * 100)}%`);
+const num = (n) => (n == null ? "–" : Number(n).toLocaleString("ko-KR"));
+
+function statTile(label, value, sub = "", tipText = "") {
+  return `<div class="st-tile">
+    <span class="st-label">${esc(label)}${tipText ? ` ${tip(tipText, label)}` : ""}</span>
+    <span class="st-value">${value}</span>
+    ${sub ? `<span class="st-sub">${sub}</span>` : ""}
+  </div>`;
+}
+
+// 가로 막대: 이름 · 막대 · 숫자 (색 하나, 값은 늘 글자로 함께 → 색만으로 읽지 않게)
+function hbars(rows, unit = "") {
+  const max = Math.max(1, ...rows.map((r) => r.n || 0));
+  return `<div class="hb" role="table">
+    ${rows.map((r) => `
+      <div class="hb-row" role="row">
+        <span class="hb-label" role="cell">${esc(r.label)}</span>
+        <span class="hb-track" role="cell" aria-hidden="true">${r.n ? `<i style="width:${Math.max(2, (r.n / max) * 100)}%"></i>` : ""}</span>
+        <span class="hb-val" role="cell">${r.n == null ? `<span class="muted" data-tip="개인을 알아볼 수 없게 5명 미만 묶음은 숫자를 가려요">5명 미만</span>` : num(r.n) + unit}</span>
+      </div>`).join("")}
+  </div>`;
+}
+
+// 최근 14일 막대: 막대에 마우스를 올리면 날짜·개수, 아래 표로도 볼 수 있음
+function dailyBars(daily) {
+  const max = Math.max(1, ...daily.map((d) => d.n));
+  const label = (d) => `${Number(d.day.slice(5, 7))}월 ${Number(d.day.slice(8, 10))}일`;
+  return `
+    <div class="vb" role="img" aria-label="최근 14일 새 대화 수">
+      <div class="vb-grid">
+        ${daily.map((d) => `
+          <div class="vb-col" data-tip="${label(d)} · 대화 ${d.n}개">
+            <i style="height:${d.n ? Math.max(3, (d.n / max) * 100) : 0}%"></i>
+          </div>`).join("")}
+      </div>
+      <div class="vb-axis"><span>${label(daily[0])}</span><span>오늘</span></div>
+    </div>
+    <details class="vb-table"><summary>표로 보기</summary>
+      <table><thead><tr><th>날짜</th><th>새 대화</th></tr></thead>
+      <tbody>${daily.map((d) => `<tr><td>${label(d)}</td><td>${d.n}</td></tr>`).join("")}</tbody></table>
+    </details>`;
+}
+
+async function viewStats(includeOwner = false) {
+  if (!state.user?.admin) { location.replace("#/"); return; }
+  $app.innerHTML = `
+    ${topBar()}
+    <div class="stats">
+      <a class="back" href="#/">← 주제 목록</a>
+      <div class="st-head">
+        <h1 class="page-title">사용 통계 ${tip("숫자만 보여요. 질문·생각·답·메모의 내용은 볼 수 없고, 5명 미만인 묶음은 가려요. 가입하면 들어가는 예시 주제는 빼고 셌어요.", "사용 통계 안내")}</h1>
+        <label class="st-toggle"><input type="checkbox" id="st-owner" ${includeOwner ? "checked" : ""}> 내 계정도 포함</label>
+      </div>
+      <div id="st-body"><p class="map-loading">통계를 모으는 중…</p></div>
+    </div>`;
+  bindTopBar();
+  document.getElementById("st-owner").onchange = (e) => { location.hash = e.target.checked ? "#/stats?owner=1" : "#/stats"; };
+  let d;
+  try { d = await api(`/api/admin/stats${includeOwner ? "?include_owner=1" : ""}`); }
+  catch (err) { document.getElementById("st-body").innerHTML = `<p class="map-loading err">${esc(err.message)}</p>`; return; }
+  const $b = document.getElementById("st-body");
+  if (d.empty) {
+    $b.innerHTML = `<p class="empty">아직 ${includeOwner ? "" : "나 말고 "}가입한 사람이 없어요.${includeOwner ? "" : " '내 계정도 포함'을 켜면 내 사용 기록으로 볼 수 있어요."}</p>`;
+    return;
+  }
+  const { users, topics, turns, notes, mindmap, ai } = d;
+  $b.innerHTML = `
+    <section class="st-sec">
+      <div class="st-grid">
+        ${statTile("가입한 사람", num(users.total), `최근 7일 새로 ${num(users.new_7d)}명`)}
+        ${statTile("최근 7일 쓴 사람", num(users.active_7d), "대화를 하나라도 남긴 사람")}
+        ${statTile("주제", num(topics.total), `완료 ${num(topics.done)} · 주제당 대화 ${topics.avg_turns ?? "–"}개`)}
+        ${statTile("대화", num(turns.total), `AI 답까지 받은 대화 ${num(turns.answered)}`)}
+      </div>
+    </section>
+
+    <section class="st-sec">
+      <h2 class="st-title">AI보다 먼저 생각했나</h2>
+      <div class="st-grid">
+        ${statTile("내 생각 길이", turns.thought_avg == null ? "–" : `${num(turns.thought_avg)}자`, `가운데값 ${turns.thought_median ?? "–"}자`, "AI 답을 받은 대화에서, 답을 보기 전에 적은 내 생각의 평균 글자 수예요.")}
+        ${statTile("AI 답 대비 내 생각", pct(turns.thought_vs_ai), "글자 수 비율", "내 생각 글자 수 합 ÷ AI 답 글자 수 합. 높을수록 AI 답에 비해 내 생각을 많이 적었다는 뜻이에요.")}
+        ${statTile("생각 메모를 남긴 대화", pct(turns.reflection_rate), "AI 답을 보고 돌아본 비율", "AI 답을 받은 대화 중 '생각 메모'에 소감을 남긴 비율이에요.")}
+      </div>
+    </section>
+
+    <section class="st-sec">
+      <h2 class="st-title">곁가지를 메모함에 담았나</h2>
+      <div class="st-split">
+        <div class="st-grid two">
+          ${statTile("메모", num(notes.total), `완료 ${pct(notes.done_rate)}`)}
+          ${statTile("메모를 쓴 주제", pct(notes.topic_rate), "메모가 하나라도 있는 주제")}
+        </div>
+        <div class="st-card"><h3 class="st-sub-title">종류별</h3>${hbars(notes.kinds, "개")}</div>
+      </div>
+    </section>
+
+    <section class="st-sec">
+      <h2 class="st-title">마인드맵</h2>
+      <div class="st-grid">
+        ${statTile("만든 마인드맵", num(mindmap.maps))}
+        ${statTile("직접 고친 비율", pct(mindmap.edited_rate), "AI 정리를 사용자가 바로잡음", "AI가 정리한 마인드맵을 사용자가 '직접 고치기'로 바꾼 비율이에요.")}
+        ${statTile("겹치는 생각", mindmap.shared_avg == null ? "–" : `평균 ${mindmap.shared_avg}개`, `같은 생각 ${num(mindmap.same)} · 비슷한 생각 ${num(mindmap.similar)}`)}
+      </div>
+    </section>
+
+    <section class="st-sec">
+      <h2 class="st-title">최근 14일 새 대화</h2>
+      <div class="st-card">${dailyBars(d.daily)}</div>
+    </section>
+
+    <section class="st-sec">
+      <h2 class="st-title">가입한 사람 ${tip("가입할 때 받은 나이·성별을 묶음으로만 보여요. 5명 미만인 묶음은 숫자를 가려요.", "가입자 안내")}</h2>
+      ${d.ages ? `<div class="st-split even">
+        <div class="st-card"><h3 class="st-sub-title">연령대</h3>${hbars(d.ages, "명")}</div>
+        <div class="st-card"><h3 class="st-sub-title">성별</h3>${hbars(d.genders, "명")}</div>
+      </div>` : `<p class="st-note">가입한 사람이 ${d.min_group}명 이상이 되면 보여요.</p>`}
+    </section>
+
+    <section class="st-sec">
+      <h2 class="st-title">AI 사용량 ${tip("AI를 부른 횟수예요. 이미 받은 답이나 저장된 마인드맵을 다시 본 건 세지 않아요.", "AI 사용량 안내")}</h2>
+      <div class="st-grid">
+        ${statTile("오늘", `${num(ai.today)}회`)}
+        ${statTile("최근 7일 AI 답", `${num(ai.week_answer)}회`)}
+        ${statTile("최근 7일 마인드맵 정리", `${num(ai.week_mindmap)}회`)}
+      </div>
+    </section>`;
 }
 
 // ---------- 설정: AI 사용 (초대 코드) ----------
@@ -1752,6 +1884,7 @@ async function route() {
   if (path === "/reset") return viewReset(qs.get("token") || "");
   let m;
   if (path === "/settings") return viewSettings();
+  if (path === "/stats") return viewStats(qs.get("owner") === "1");
   if (path === "/new") await viewNewTopic();
   else if ((m = path.match(/^\/topic\/(\d+)\/map$/))) { window.scrollTo(0, 0); await viewTopic(Number(m[1]), "map"); }
   else if ((m = path.match(/^\/topic\/(\d+)$/))) {

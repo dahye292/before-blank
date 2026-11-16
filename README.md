@@ -153,6 +153,7 @@ python app.py             # http://localhost:5050
 | 다른 DB·포트로 실행 | `python app.py --db=data/other.db --port=5051` |
 | 디버그 모드 | `FLASK_DEBUG=1 python app.py` |
 | DB 백업 (서버를 멈추지 않고, 최근 14개 보관) | `python backup_db.py` |
+| 사용 통계 보기 (주인 계정만) | 프로필 메뉴 → **사용 통계**. 숫자만 보이고 질문·생각·메모 내용은 서버가 보내지 않으며, 5명 미만 묶음은 가립니다. 예시 주제는 빼고 셉니다. |
 
 ## 보안과 배포
 
