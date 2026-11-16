@@ -1,3 +1,6 @@
 flask>=3.1
 anthropic>=2.8
 python-dotenv>=1.0
+# 실제 서비스용 서버 (리눅스: gunicorn, 윈도우: waitress)
+gunicorn>=23.0; platform_system != "Windows"
+waitress>=3.0

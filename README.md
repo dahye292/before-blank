@@ -152,3 +152,20 @@ python app.py             # http://localhost:5050
 | 내 계정에 예시 주제 넣기 | `python seed_demo.py --email=내이메일` |
 | 다른 DB·포트로 실행 | `python app.py --db=data/other.db --port=5051` |
 | 디버그 모드 | `FLASK_DEBUG=1 python app.py` |
+| DB 백업 (서버를 멈추지 않고, 최근 14개 보관) | `python backup_db.py` |
+
+## 보안과 배포
+
+이미 되어 있는 것
+- 비밀번호는 해시로만 저장, 비밀번호 재설정 링크는 1회용·30분·DB에는 해시만
+- 다른 사람의 주제·대화·메모·첨부파일은 서버에서 계정 기준으로 막고 '없음'(404)으로 응답
+- 데이터를 바꾸는 요청은 JSON만 받아 다른 사이트에서 몰래 보내는 요청(CSRF)을 막음, 쿠키는 HttpOnly·SameSite
+- 보안 헤더: CSP(외부·인라인 스크립트 금지, 다른 사이트에 끼워 넣기 금지), nosniff, Referrer-Policy, API 응답 캐시 금지, 배포 모드에서 HSTS
+- 시도 횟수 제한을 DB에 기록(서버를 다시 켜도 유지): 로그인은 같은 계정·같은 곳 5번 / 한 곳 30번(남이 내 계정을 일부러 잠그기 어렵게), 초대 코드 5번, 비밀번호 찾기 이메일당 3번
+- 내 API 키는 `.env`에만, AI는 주인 계정과 초대 코드 계정만, 하루 한도
+
+인터넷에 올릴 때
+1. `.env`에 `PRODUCTION=1`, `SECRET_KEY`(32자 이상, `python -c "import secrets; print(secrets.token_hex(32))"`)를 넣습니다. 키가 없으면 서버가 켜지지 않습니다. 배포 모드에서는 https 전용 쿠키, 프록시 뒤 실제 접속 주소 사용, HSTS가 켜집니다.
+2. 개발용 `python app.py` 대신 `gunicorn --workers 2 --threads 8 --timeout 120 --bind 0.0.0.0:$PORT wsgi:app`(리눅스)으로 실행하고, https는 배포 서비스나 앞단 서버에서 처리합니다.
+3. `data/` 폴더(DB·첨부파일)는 사라지지 않는 저장 공간에 두고, `backup_db.py`를 하루 한 번 돌립니다.
+4. Anthropic 콘솔에서 월 사용 한도를 정해 둡니다.

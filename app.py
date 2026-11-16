@@ -47,14 +47,27 @@ load_dotenv(BASE_DIR / ".env")
 DEMO = os.environ.get("THINKFIRST_DEMO") == "1" or "--demo" in sys.argv
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
+
+# 배포 모드(PRODUCTION=1): 인터넷에 올릴 때 켠다. https 전용 쿠키, 직접 정한 SECRET_KEY 필수.
+PRODUCTION = os.environ.get("PRODUCTION") == "1"
+if os.environ.get("TRUST_PROXY") == "1" or PRODUCTION:
+    # 배포 서버의 중계 장치(프록시) 뒤에서는 모든 요청이 프록시 주소로 보인다.
+    # 프록시가 붙여 주는 X-Forwarded-For/Proto를 한 단계만 믿어 실제 접속 주소와 https 여부를 얻는다.
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 # 디자인(CSS·JS)을 고치면 새로고침만으로 바로 반영되게 브라우저 캐시를 쓰지 않는다
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
 
 def _secret_key():
-    """로그인 쿠키 서명용 키. .env의 SECRET_KEY를 쓰고, 없으면 data/secret_key 파일에 만들어 둔다(git 제외)."""
+    """로그인 쿠키 서명용 키. .env의 SECRET_KEY를 쓰고, 없으면 data/secret_key 파일에 만들어 둔다(git 제외).
+    배포 모드에서는 서버가 바뀌어도 로그인이 유지되고 키가 파일로 흩어지지 않게, 직접 정한 키를 반드시 쓴다."""
     if os.environ.get("SECRET_KEY"):
+        if PRODUCTION and len(os.environ["SECRET_KEY"]) < 32:
+            raise SystemExit("PRODUCTION=1에서는 SECRET_KEY를 32자 이상으로 정해 주세요. (예: python -c \"import secrets; print(secrets.token_hex(32))\")")
         return os.environ["SECRET_KEY"]
+    if PRODUCTION:
+        raise SystemExit("PRODUCTION=1에서는 .env에 SECRET_KEY를 꼭 정해 주세요. (예: python -c \"import secrets; print(secrets.token_hex(32))\")")
     path = DB_PATH.parent / "secret_key"
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
@@ -76,7 +89,7 @@ app.config["MAX_CONTENT_LENGTH"] = (MAX_FILE_MB * MAX_FILES_PER_TURN + 1) * 1024
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,      # 자바스크립트에서 로그인 쿠키를 읽을 수 없게
     SESSION_COOKIE_SAMESITE="Lax",     # 다른 사이트에서 보낸 요청에는 쿠키가 붙지 않게
-    SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE") == "1",  # https로 배포할 때 켠다
+    SESSION_COOKIE_SECURE=PRODUCTION or os.environ.get("SESSION_COOKIE_SECURE") == "1",  # https에서만 쿠키 전송 (배포 모드면 자동)
     PERMANENT_SESSION_LIFETIME=timedelta(days=14),
 )
 
@@ -131,6 +144,13 @@ def init_db():
                 gender TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS rate_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,
+                key TEXT NOT NULL,
+                at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_rate_events ON rate_events(kind, key, at);
             CREATE TABLE IF NOT EXISTS ai_usage (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -287,7 +307,32 @@ def touch_topic(db, topic_id):
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 GENDERS = ("여성", "남성", "기타", "응답 안 함")
 MIN_AGE = 14  # 만 14세 미만은 법정대리인 동의가 필요해서 가입을 받지 않는다
-_login_fails = {}  # 이메일별 로그인 실패 기록 (간단한 무차별 대입 방지)
+
+
+# ---------- 시도 횟수 제한 (로그인·초대 코드·비밀번호 찾기) ----------
+# 기록을 DB에 두어 서버를 다시 켜도 초기화되지 않는다.
+
+def rate_count(kind, key, window):
+    db = get_db()
+    db.execute("DELETE FROM rate_events WHERE at < ?", (time.time() - 86400,))  # 하루 지난 기록은 정리
+    return db.execute("SELECT COUNT(*) FROM rate_events WHERE kind = ? AND key = ? AND at > ?",
+                      (kind, key, time.time() - window)).fetchone()[0]
+
+
+def rate_hit(kind, key):
+    db = get_db()
+    db.execute("INSERT INTO rate_events (kind, key, at) VALUES (?, ?, ?)", (kind, key, time.time()))
+    db.commit()
+
+
+def rate_clear(kind, key):
+    db = get_db()
+    db.execute("DELETE FROM rate_events WHERE kind = ? AND key = ?", (kind, key))
+    db.commit()
+
+
+def client_ip():
+    return request.remote_addr or "?"
 
 
 def current_user_id():
@@ -301,6 +346,36 @@ def login_required(view):
             return jsonify(error="로그인이 필요해요."), 401
         return view(*args, **kwargs)
     return wrapper
+
+
+# 모든 응답에 붙이는 보안 헤더
+CSP = "; ".join([
+    "default-src 'self'",
+    "script-src 'self'",                                        # 외부·인라인 스크립트 실행 금지
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",  # 화면 코드가 쓰는 style 속성 + 글꼴 CSS
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data: blob:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",                                   # 다른 사이트 안에 끼워 넣기(클릭재킹) 금지
+])
+
+
+@app.after_request
+def security_headers(resp):
+    h = resp.headers
+    h.setdefault("Content-Security-Policy", CSP)
+    h.setdefault("X-Content-Type-Options", "nosniff")
+    h.setdefault("X-Frame-Options", "DENY")
+    h.setdefault("Referrer-Policy", "same-origin")
+    h.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if request.path.startswith("/api/"):
+        h.setdefault("Cache-Control", "no-store")  # 개인 기록이 브라우저·중간 서버 캐시에 남지 않게
+    if PRODUCTION and request.is_secure:
+        h.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return resp
 
 
 @app.before_request
@@ -403,27 +478,35 @@ def ai_check(db, kind):
     return None
 
 
-_invite_fails = {}  # 접속 주소(IP)별 초대 코드 실패 기록 — 가입을 새로 해 가며 코드를 맞혀 보는 것도 막는다
 
 
-def redeem_invite(db, uid, code):
-    """초대 코드 확인. 성공하면 None, 실패하면 오류 문구."""
-    key = request.remote_addr or "?"
-    fails = [t for t in _invite_fails.get(key, []) if time.time() - t < 900]
-    if len(fails) >= 5:
-        return "초대 코드를 너무 여러 번 틀렸어요. 15분 뒤에 다시 시도해 주세요."
+def check_invite(db, code, uid=None):
+    """초대 코드가 맞고 자리가 남았는지 확인만 한다. (맞는 코드, None) 또는 (None, 오류 문구).
+    실패 기록은 바로 DB에 저장(commit)되므로, 계정을 만들기 '전에' 불러야 한다."""
+    # 접속 주소(IP)별 실패 기록 — 가입을 새로 해 가며 코드를 맞혀 보는 것도 막는다
+    key = client_ip()
+    if rate_count("invite", key, 900) >= 5:
+        return None, "초대 코드를 너무 여러 번 틀렸어요. 15분 뒤에 다시 시도해 주세요."
     codes = invite_codes()
     match = next((c for c in codes if secrets.compare_digest(c.encode(), code.encode())), None)
     if not match:
-        _invite_fails[key] = fails + [time.time()]
-        return "초대 코드가 맞지 않아요."
+        rate_hit("invite", key)
+        return None, "초대 코드가 맞지 않아요."
     cap = codes[match]
     if cap is not None:
-        used = db.execute("SELECT COUNT(*) FROM users WHERE invite_code = ? AND id != ?", (match, uid)).fetchone()[0]
+        used = db.execute("SELECT COUNT(*) FROM users WHERE invite_code = ? AND id != ?", (match, uid or -1)).fetchone()[0]
         if used >= cap:
-            return "이 초대 코드는 정원이 다 찼어요."
+            return None, "이 초대 코드는 정원이 다 찼어요."
+    rate_clear("invite", key)
+    return match, None
+
+
+def redeem_invite(db, uid, code):
+    """이미 있는 계정에 초대 코드 적용. 성공하면 None, 실패하면 오류 문구."""
+    match, err = check_invite(db, code, uid)
+    if err:
+        return err
     db.execute("UPDATE users SET invite_code = ? WHERE id = ?", (match, uid))
-    _invite_fails.pop(key, None)
     return None
 
 
@@ -457,13 +540,18 @@ def signup():
         errors["gender"] = "성별을 골라 주세요."
     if not d.get("agree"):
         errors["agree"] = "개인정보 수집·이용에 동의해야 가입할 수 있어요."
-    invite = str(d.get("invite_code", "")).strip()  # 선택. 맞는지는 가입 처리 중에 redeem_invite로 확인
+    invite = str(d.get("invite_code", "")).strip()  # 선택. 계정을 만들기 전에 check_invite로 확인
 
     db = get_db()
     if "email" not in errors and db.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone():
         errors["email"] = "이미 가입된 이메일이에요."
     if errors:
         return jsonify(error="입력한 내용을 확인해 주세요.", fields=errors), 400
+    invite_match = None
+    if invite:  # 계정을 만들기 전에 확인 (틀린 코드로 반쯤 만들어진 계정이 남지 않게)
+        invite_match, err = check_invite(db, invite)
+        if err:
+            return jsonify(error="입력한 내용을 확인해 주세요.", fields={"invite_code": err}), 400
 
     first_user = db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
     cur = db.execute(
@@ -471,11 +559,8 @@ def signup():
         (name, email, generate_password_hash(password), age, gender, now()),
     )
     uid = cur.lastrowid
-    if invite:
-        err = redeem_invite(db, uid, invite)
-        if err:
-            db.rollback()
-            return jsonify(error="입력한 내용을 확인해 주세요.", fields={"invite_code": err}), 400
+    if invite_match:
+        db.execute("UPDATE users SET invite_code = ? WHERE id = ?", (invite_match, uid))
     if first_user:
         # 회원 기능이 생기기 전에 혼자 쓰던 기록은 첫 번째 가입자의 것으로 옮긴다
         db.execute("UPDATE topics SET user_id = ? WHERE user_id IS NULL", (uid,))
@@ -493,15 +578,17 @@ def login():
     d = request.get_json(silent=True) or {}
     email = str(d.get("email", "")).strip().lower()
     password = str(d.get("password", ""))
-    fails = [t for t in _login_fails.get(email, []) if time.time() - t < 300]
-    if len(fails) >= 5:
+    # 같은 계정은 같은 곳에서 5번, 한 곳에서는 여러 계정 합쳐 30번까지 (남이 내 계정을 일부러 잠그기 어렵게 접속 주소도 함께 본다)
+    pair = f"{email}|{client_ip()}"
+    if rate_count("login", pair, 300) >= 5 or rate_count("login_ip", client_ip(), 300) >= 30:
         return jsonify(error="로그인 시도가 너무 많아요. 5분 뒤에 다시 시도해 주세요."), 429
     user = get_db().execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
     if not user or not check_password_hash(user["password_hash"], password):
-        _login_fails[email] = fails + [time.time()]
+        rate_hit("login", pair)
+        rate_hit("login_ip", client_ip())
         # 어떤 쪽이 틀렸는지 알려 주지 않는다 (가입 여부를 숨기기 위해)
         return jsonify(error="이메일 또는 비밀번호가 맞지 않아요."), 401
-    _login_fails.pop(email, None)
+    rate_clear("login", pair)
     session.clear()
     session.permanent = True
     session["uid"] = user["id"]
@@ -510,7 +597,6 @@ def login():
 
 # ---------- 비밀번호 찾기 (재설정 링크) ----------
 RESET_MINUTES = 30
-_reset_requests = {}  # 이메일별 요청 시각 (짧은 시간에 여러 번 보내지 못하게)
 
 
 def password_error(password, confirm):
@@ -548,10 +634,11 @@ def send_reset_mail(to, name, link):
 def forgot_password():
     email = str((request.json or {}).get("email", "")).strip().lower()
     generic = "가입된 이메일이라면 비밀번호 재설정 링크를 보냈어요. 메일함을 확인해 주세요."
-    recent = [t for t in _reset_requests.get(email, []) if time.time() - t < 900]
-    if len(recent) >= 3:
+    # 짧은 시간에 메일을 여러 번 보내지 못하게 (이메일별 3번, 한 곳에서 10번)
+    if rate_count("reset", email, 900) >= 3 or rate_count("reset_ip", client_ip(), 900) >= 10:
         return jsonify(error="요청이 너무 많아요. 15분 뒤에 다시 시도해 주세요."), 429
-    _reset_requests[email] = recent + [time.time()]
+    rate_hit("reset", email)
+    rate_hit("reset_ip", client_ip())
     db = get_db()
     user = db.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
     out = {"message": generic}
