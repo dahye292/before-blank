@@ -802,11 +802,11 @@ function turnHTML(t, n) {
       <h2 class="turn-q">${esc(t.question)}</h2>
       ${t.attachments?.length ? `<div class="turn-files" aria-label="첨부 자료">${t.attachments.map(fileChip).join("")}</div>` : ""}
       <section class="block mine">
-        <div class="block-label">내 생각 <small>AI 답을 보기 전에 적음</small></div>
+        <div class="block-label">내 생각</div>
         <div class="block-body">${esc(t.my_thought)}</div>
       </section>
       <section class="block ai">
-        <div class="block-label">AI <small>내 생각은 보내지 않았어요</small></div>
+        <div class="block-label">AI</div>
         <div class="md" data-answer>${t.ai_answer ? md(t.ai_answer) : ""}</div>
         ${t.ai_answer ? "" : `<button class="btn btn-primary btn-sm" data-ask>AI 답 보기</button>`}
       </section>
