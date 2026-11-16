@@ -251,6 +251,10 @@ def init_db():
             )
         # 같은 사람 안에서만 주제 이름이 겹치지 않게
         db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_topics_user_name ON topics(user_id, name)")
+        # 메모 종류 바꾸기 이전 DB: 모르는 것→확인할 것, 체크할 것→할 일, 나중에 물어볼 것→마음에 드는 것
+        if db.execute("SELECT 1 FROM side_notes WHERE kind IN ('unknown', 'later') LIMIT 1").fetchone():
+            db.execute("""UPDATE side_notes SET kind = CASE kind WHEN 'check' THEN 'todo' WHEN 'unknown' THEN 'check'
+                          WHEN 'later' THEN 'like' END WHERE kind IN ('check', 'unknown', 'later')""")
         # 폴더 기능 이전 DB: 주제에 폴더 칸 추가 (비어 있으면 '폴더 없음')
         if "folder_id" not in columns(db, "topics"):
             db.execute("ALTER TABLE topics ADD COLUMN folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL")
@@ -791,8 +795,8 @@ def delete_topic(topic_id):
 
 # ---------- 메모함 ----------
 # AI 답에서 지금 따라가면 대화가 새는 것들을 붙잡아 두는 곳:
-# 모르는 것(unknown) / 나중에 물어볼 것(later) / 체크할 것(check) + 우선순위 + 완료
-NOTE_KINDS = ("unknown", "later", "check")
+# 확인할 것(check) / 할 일(todo) / 마음에 드는 것(like) + 우선순위 + 완료
+NOTE_KINDS = ("check", "todo", "like")
 PRIORITIES = ("high", "mid", "low")
 
 

@@ -186,7 +186,7 @@ TOPICS = [
                 "question": "노인 인구 비율, 쉼터 접근성, 녹지 비율, 지표면 온도 데이터는 각각 어디서 구해?",
                 "my_thought": "인구는 통계청, 쉼터는 공공데이터포털에 있을 것 같아. 녹지랑 지표면 온도는 잘 모르겠어. 출처만 정하고 바로 다음 단계로 가고 싶어.",
                 "ai_answer": "## 지표별 출처\n\n- **노인 인구 비율**: 통계청 SGIS 행정동 단위 인구\n- **쉼터 접근성**: 행정안전부 무더위쉼터 목록(공공데이터포털) — 연도별로 바뀌니 **최신 연도**를 확인하세요\n- **녹지 비율**: 환경부 토지피복지도\n- **지표면 온도**: USGS EarthExplorer의 Landsat 8, 또는 **Google Earth Engine**에서 바로 계산\n\n결과는 **kepler.gl로 3D 지도**를 만들면 발표 때 인상적이고, **GitHub Pages**에 올리면 링크로 공유할 수도 있어요.",
-                "memo": "3D 지도랑 웹 공유는 끌리지만 제출물은 PDF 보고서다. 따라가지 않고 '나중에 물어볼 것'으로 미뤄 둠. 출처는 네 개 모두 확정.",
+                "memo": "3D 지도랑 웹 공유는 끌리지만 제출물은 PDF 보고서다. 따라가지 않고 '마음에 드는 것'으로 담아 둠. 출처는 네 개 모두 확정.",
             },
             {
                 "at": T(1, 1, 41),
@@ -198,15 +198,15 @@ TOPICS = [
         ],
         # 대화 중 AI 답에서 드래그해 담아 둔 메모 (turn은 위 대화의 순서 번호)
         "notes": [
-            {"turn": 0, "kind": "unknown", "text": "min-max 정규화나 z-score 표준화", "note": "둘 중 뭘 써야 하는지 모름. 보고서 쓰기 전에 확인", "priority": "high"},
-            {"turn": 0, "kind": "unknown", "text": "Landsat 위성 자료는 대기 보정이 필요해요", "note": "", "priority": "mid"},
-            {"turn": 1, "kind": "check", "text": "최신 연도를 확인하세요", "note": "무더위쉼터 목록 2025년판 받음", "priority": "high", "done": 1},
-            {"turn": 1, "kind": "unknown", "text": "Google Earth Engine", "note": "", "priority": "mid"},
-            {"turn": 1, "kind": "later", "text": "kepler.gl로 3D 지도", "note": "발표 자료 만들 때 물어보기", "priority": "low"},
-            {"turn": 1, "kind": "later", "text": "GitHub Pages에 올리면 링크로 공유", "note": "제출물은 PDF라 필수 아님", "priority": "low"},
-            {"turn": 2, "kind": "check", "text": "녹지 비율과 지표면 온도는 서로 강하게 연결", "note": "상관계수 먼저 계산하기", "priority": "high"},
-            {"turn": 2, "kind": "check", "text": "가중치를 바꿔도 상위 지역이 크게 바뀌지 않는지 확인", "note": "", "priority": "mid"},
-            {"turn": 2, "kind": "unknown", "text": "엔트로피 가중치", "note": "", "priority": "low"},
+            {"turn": 0, "kind": "check", "text": "min-max 정규화나 z-score 표준화", "note": "둘 중 뭘 써야 하는지 모름. 보고서 쓰기 전에 확인", "priority": "high"},
+            {"turn": 0, "kind": "check", "text": "Landsat 위성 자료는 대기 보정이 필요해요", "note": "", "priority": "mid"},
+            {"turn": 1, "kind": "todo", "text": "최신 연도를 확인하세요", "note": "무더위쉼터 목록 2025년판 받음", "priority": "high", "done": 1},
+            {"turn": 1, "kind": "check", "text": "Google Earth Engine", "note": "", "priority": "mid"},
+            {"turn": 1, "kind": "like", "text": "kepler.gl로 3D 지도", "note": "발표 자료 만들 때 물어보기", "priority": "low"},
+            {"turn": 1, "kind": "like", "text": "GitHub Pages에 올리면 링크로 공유", "note": "제출물은 PDF라 필수 아님", "priority": "low"},
+            {"turn": 2, "kind": "todo", "text": "녹지 비율과 지표면 온도는 서로 강하게 연결", "note": "상관계수 먼저 계산하기", "priority": "high"},
+            {"turn": 2, "kind": "todo", "text": "가중치를 바꿔도 상위 지역이 크게 바뀌지 않는지 확인", "note": "", "priority": "mid"},
+            {"turn": 2, "kind": "check", "text": "엔트로피 가중치", "note": "", "priority": "low"},
         ],
         "mindmap": {
             "mine_only": [
@@ -252,9 +252,9 @@ TOPICS = [
             },
         ],
         "notes": [
-            {"turn": 0, "kind": "unknown", "text": "STAR 기법(상황-과제-행동-결과)", "note": "", "priority": "mid"},
-            {"turn": 0, "kind": "check", "text": "지원 회사의 인재상", "note": "채용 공고와 회사 소개 페이지에서 확인", "priority": "high"},
-            {"turn": 1, "kind": "later", "text": "둘째 문단은 어떻게 구성할까?", "note": "첫 문단 끝내고 묻기", "priority": "mid"},
+            {"turn": 0, "kind": "check", "text": "STAR 기법(상황-과제-행동-결과)", "note": "", "priority": "mid"},
+            {"turn": 0, "kind": "todo", "text": "지원 회사의 인재상", "note": "채용 공고와 회사 소개 페이지에서 확인", "priority": "high"},
+            {"turn": 1, "kind": "like", "text": "둘째 문단은 어떻게 구성할까?", "note": "첫 문단 끝내고 묻기", "priority": "mid"},
         ],
         "mindmap": {
             "mine_only": [

@@ -476,9 +476,12 @@ function bindTopicStar(id, topic) {
 }
 
 // ---------- 메모함: AI 답에서 새는 것들을 붙잡아 두는 곳 ----------
-// 대화는 한 방향으로 이어 가고, AI가 말한 것 중 지금 따라가면 새는 것(모르는 것·나중에 물어볼 것·체크할 것)은
+// 대화는 한 방향으로 이어 가고, AI가 말한 것 중 지금 따라가면 새는 것(확인할 것·할 일·마음에 드는 것)은
 // 드래그해서 여기에 담아 두고 우선순위와 완료로 관리한다.
-const NOTE_KINDS = { unknown: "모르는 것", later: "나중에 물어볼 것", check: "체크할 것" };
+//   확인할 것: 모르는 말, 맞는지 알아볼 것 (AI에게 다시 물어볼 수도 있음)
+//   할 일: 내가 직접 해야 할 것
+//   마음에 드는 것: 나중에 가져다 쓰고 싶은 아이디어
+const NOTE_KINDS = { check: "확인할 것", todo: "할 일", like: "마음에 드는 것" };
 const PRIORITY = { high: "높음", mid: "보통", low: "낮음" };
 const PRIORITY_ORDER = { high: 0, mid: 1, low: 2 };
 const chatCtx = { topic: null, turns: [], notes: [], filter: "all", adding: false, open: false };
@@ -530,9 +533,9 @@ function renderNotes() {
           <div class="note-foot">
             ${n.turn_id && turnNo[n.turn_id] ? `<button class="turn-chip" data-n-jump="${n.turn_id}">대화 ${turnNo[n.turn_id]}</button>` : ""}
             <button class="note-link" data-n-note>${n.note ? "메모 고치기" : "메모 달기"}</button>
-            ${n.kind === "later" && !n.done ? `<button class="note-link strong" data-n-ask>지금 물어보기 →</button>` : ""}
+            ${n.kind === "check" && !n.done ? `<button class="note-link strong" data-n-ask>AI에게 물어보기 →</button>` : ""}
           </div>
-        </li>`).join("") : `<li class="np-empty">${notes.length ? "이 종류의 메모는 없어요." : "아직 담은 메모가 없어요.<br>AI 답에서 모르는 말이나 나중에 물어볼 것을 드래그해 보세요."}</li>`}
+        </li>`).join("") : `<li class="np-empty">${notes.length ? "이 종류의 메모는 없어요." : "아직 담은 메모가 없어요.<br>AI 답에서 확인할 것, 할 일, 마음에 드는 아이디어를 드래그해 보세요."}</li>`}
     </ul>`;
   updateNoteBadges();
 }
@@ -581,7 +584,7 @@ function bindNotesPanel() {
       }
       else if (el.closest("[data-n-jump]")) { jumpToTurn(Number(el.closest("[data-n-jump]").dataset.nJump)); toggleNotes(false); }
       else if (el.closest("[data-n-ask]")) {
-        // 나중에 물어볼 것 → 입력창에 질문으로 옮기고, 물어보면 완료로
+        // 확인할 것 → 입력창에 질문으로 옮기고, 물어보면 완료로
         const { topic, turns } = chatCtx;
         state.drafts[topic.id] = { step: 1, question: note.text, thought: "", files: [], fromNote: id };
         renderComposer(topic, turns);
@@ -1370,7 +1373,7 @@ function brandPanel() {
       <ol class="brand-steps">
         <li><span class="step-num">01</span><div><b>질문을 적어요</b><p>AI에게 물어보고 싶은 걸 먼저 적어요.</p></div></li>
         <li><span class="step-num">02</span><div><b>내 생각을 먼저 써요</b><p>20자 이상 써야 AI 답이 열려요. 내 생각은 AI에게 보내지 않아요.</p></div></li>
-        <li><span class="step-num">03</span><div><b>새는 건 메모함에</b><p>AI 답에서 모르는 말, 나중에 물어볼 것은 드래그해서 담아 두고 대화는 한 방향으로 이어 가요.</p></div></li>
+        <li><span class="step-num">03</span><div><b>새는 건 메모함에</b><p>AI 답에서 확인할 것, 할 일, 마음에 드는 아이디어는 드래그해서 담아 두고 대화는 한 방향으로 이어 가요.</p></div></li>
         <li><span class="step-num">04</span><div><b>마인드맵으로 정리돼요</b><p>나만의 관점, 겹치는 생각, AI만의 관점이 나뉘고, 누르면 그 대화로 이동해요.</p></div></li>
       </ol>
     </section>`;

@@ -752,18 +752,18 @@ a.file-chip:hover { border-color: var(--quiet); color: var(--text); }
 .np-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .np-empty { font-size: 12.5px; color: var(--quiet); text-align: center; padding: 18px 4px; line-height: 1.6; }
 .note { border: 1px solid var(--hairline-strong); border-left: 2px solid var(--quiet); border-radius: var(--r-control); padding: 8px 10px; background: var(--raised); }
-.note.unknown { border-left-color: var(--ai); }
-.note.later { border-left-color: var(--mine); }
-.note.check { border-left-color: var(--done); }
+.note.check { border-left-color: var(--ai); }
+.note.todo { border-left-color: var(--done); }
+.note.like { border-left-color: var(--mine); }
 .note.done { opacity: .5; }
 .note.done .note-text { text-decoration: line-through; }
 .note.just-added { animation: flash 1.6s ease-out; }
 .note-top { display: flex; align-items: center; gap: 6px; }
 .note-check input { width: 15px; height: 15px; accent-color: var(--done); cursor: pointer; margin: 0; }
 .note-kind { font-size: 11.5px; font-weight: 600; color: var(--text-2); }
-.note.unknown .note-kind { color: var(--ai); }
-.note.later .note-kind { color: var(--mine); }
-.note.check .note-kind { color: var(--done); }
+.note.check .note-kind { color: var(--ai); }
+.note.todo .note-kind { color: var(--done); }
+.note.like .note-kind { color: var(--mine); }
 .note-pri { margin-left: auto; font-size: 11px; border: 1px solid var(--hairline-strong); background: none; border-radius: 4px; padding: 0 6px; line-height: 18px; color: var(--muted); cursor: pointer; }
 .note-pri.high { color: var(--shared); border-color: color-mix(in srgb, var(--shared) 50%, transparent); }
 .note-pri.low { color: var(--quiet); }
@@ -783,10 +783,10 @@ a.file-chip:hover { border-color: var(--quiet); color: var(--text); }
 .sel-pop[hidden] { display: none; }
 .sel-pop button { border: none; background: none; color: var(--text-2); font-size: 12.5px; padding: 5px 9px; border-radius: var(--r-control); cursor: pointer; white-space: nowrap; }
 .sel-pop button:hover { background: var(--hover); color: var(--text); }
-.sel-pop button[data-sel-kind="unknown"]::before, .sel-pop button[data-sel-kind="later"]::before, .sel-pop button[data-sel-kind="check"]::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
-.sel-pop button[data-sel-kind="unknown"]::before { background: var(--ai); }
-.sel-pop button[data-sel-kind="later"]::before { background: var(--mine); }
-.sel-pop button[data-sel-kind="check"]::before { background: var(--done); }
+.sel-pop button[data-sel-kind="check"]::before, .sel-pop button[data-sel-kind="todo"]::before, .sel-pop button[data-sel-kind="like"]::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+.sel-pop button[data-sel-kind="check"]::before { background: var(--ai); }
+.sel-pop button[data-sel-kind="todo"]::before { background: var(--done); }
+.sel-pop button[data-sel-kind="like"]::before { background: var(--mine); }
 .block.ai .md::selection, .block.ai .md *::selection { background: color-mix(in srgb, var(--mine) 35%, transparent); }
 
 /* 좁은 화면: 메모함은 오른쪽에서 열리는 서랍 */
