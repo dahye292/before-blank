@@ -1,8 +1,10 @@
 """예시 데이터 넣기.
 
-    python seed_demo.py
+    python seed_demo.py                      # 체험용 계정을 만들고 그 계정에 넣는다
+    python seed_demo.py --email=me@example.com  # 이미 가입한 내 계정에 넣는다
 
-이미 같은 이름의 주제가 있으면 그 주제는 건너뛴다 (기존 데이터는 건드리지 않음).
+체험용 계정: demo@thinkfirst.local / thinkfirst1  (로컬 체험 전용, 실제 서비스에서는 쓰지 말 것)
+그 계정에 같은 이름의 주제가 이미 있으면 건너뛴다 (기존 데이터는 건드리지 않음).
 마인드맵도 미리 정리해 넣어 두어서 API 키 없이도 마인드맵 탭을 볼 수 있다.
 """
 
@@ -10,7 +12,11 @@ import json
 import sqlite3
 from datetime import datetime, timedelta
 
+from werkzeug.security import generate_password_hash
+
 import app  # import 하면 DB 테이블이 준비된다
+
+DEMO_USER = {"name": "체험용", "email": "demo@thinkfirst.local", "password": "thinkfirst1", "age": 25, "gender": "응답 안 함"}
 
 T = lambda days, hours=0, minutes=0: (
     datetime(2026, 11, 16, 9, 0) - timedelta(days=days) + timedelta(hours=hours, minutes=minutes)
@@ -161,17 +167,37 @@ TOPICS = [
 ]
 
 
+def target_user(db):
+    email = app._arg("email")
+    if email:
+        row = db.execute("SELECT id FROM users WHERE email = ?", (email.strip().lower(),)).fetchone()
+        if not row:
+            raise SystemExit(f"{email} 로 가입한 계정이 없어요. 먼저 사이트에서 회원가입해 주세요.")
+        return row[0], email
+    row = db.execute("SELECT id FROM users WHERE email = ?", (DEMO_USER["email"],)).fetchone()
+    if row:
+        return row[0], DEMO_USER["email"]
+    cur = db.execute(
+        "INSERT INTO users (name, email, password_hash, age, gender, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (DEMO_USER["name"], DEMO_USER["email"], generate_password_hash(DEMO_USER["password"]),
+         DEMO_USER["age"], DEMO_USER["gender"], app.now()),
+    )
+    print(f"체험용 계정을 만들었어요: {DEMO_USER['email']} / {DEMO_USER['password']}")
+    return cur.lastrowid, DEMO_USER["email"]
+
+
 def main():
     db = sqlite3.connect(app.DB_PATH)
+    uid, email = target_user(db)
     added, skipped = [], []
     for topic in TOPICS:
-        if db.execute("SELECT 1 FROM topics WHERE name = ?", (topic["name"],)).fetchone():
+        if db.execute("SELECT 1 FROM topics WHERE name = ? AND user_id = ?", (topic["name"], uid)).fetchone():
             skipped.append(topic["name"])
             continue
         first, last = topic["turns"][0]["at"], topic["turns"][-1]["at"]
         cur = db.execute(
-            "INSERT INTO topics (name, created_at, updated_at, is_starred, status) VALUES (?, ?, ?, ?, ?)",
-            (topic["name"], first, last, topic["is_starred"], topic["status"]),
+            "INSERT INTO topics (user_id, name, created_at, updated_at, is_starred, status) VALUES (?, ?, ?, ?, ?, ?)",
+            (uid, topic["name"], first, last, topic["is_starred"], topic["status"]),
         )
         topic_id = cur.lastrowid
         ids = []
@@ -193,7 +219,7 @@ def main():
         added.append(f"{topic['name']} (대화 {len(ids)}개)")
     db.commit()
     db.close()
-    print("추가:", ", ".join(added) if added else "없음")
+    print(f"[{email}] 추가:", ", ".join(added) if added else "없음")
     if skipped:
         print("이미 있어서 건너뜀:", ", ".join(skipped))
 

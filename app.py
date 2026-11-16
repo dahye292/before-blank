@@ -8,15 +8,18 @@ AI에게 묻기 전에 내 생각을 먼저 적고, 그다음에 AI의 답을 �
 import json
 import os
 import re
+import secrets
 import sqlite3
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+from functools import wraps
 from pathlib import Path
 
 import anthropic
 from dotenv import load_dotenv
-from flask import Flask, Response, g, jsonify, request, send_from_directory
+from flask import Flask, Response, g, jsonify, request, send_from_directory, session
+from werkzeug.security import check_password_hash, generate_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent
 def _arg(name, default=None):
@@ -40,6 +43,26 @@ DEMO = os.environ.get("THINKFIRST_DEMO") == "1" or "--demo" in sys.argv
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 # 디자인(CSS·JS)을 고치면 새로고침만으로 바로 반영되게 브라우저 캐시를 쓰지 않는다
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+
+
+def _secret_key():
+    """로그인 쿠키 서명용 키. .env의 SECRET_KEY를 쓰고, 없으면 data/secret_key 파일에 만들어 둔다(git 제외)."""
+    if os.environ.get("SECRET_KEY"):
+        return os.environ["SECRET_KEY"]
+    path = DB_PATH.parent / "secret_key"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(secrets.token_hex(32), encoding="utf-8")
+    return path.read_text(encoding="utf-8").strip()
+
+
+app.secret_key = _secret_key()
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,      # 자바스크립트에서 로그인 쿠키를 읽을 수 없게
+    SESSION_COOKIE_SAMESITE="Lax",     # 다른 사이트에서 보낸 요청에는 쿠키가 붙지 않게
+    SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE") == "1",  # https로 배포할 때 켠다
+    PERMANENT_SESSION_LIFETIME=timedelta(days=14),
+)
 
 SYSTEM_PROMPT = (
     "당신은 사용자가 스스로 생각한 뒤에 참고하는 조언자입니다. "
@@ -83,10 +106,24 @@ def init_db():
     try:
         db.executescript(
             """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                age INTEGER NOT NULL,
+                gender TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS topics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                created_at TEXT NOT NULL
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
+                is_starred INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'in_progress',
+                mindmap TEXT
             );
             CREATE TABLE IF NOT EXISTS turns (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,6 +171,31 @@ def init_db():
             )
             # 지우지 않고 이름만 바꿔 둔다 (되돌릴 수 있게)
             db.execute("ALTER TABLE entries RENAME TO entries_legacy")
+
+        # 회원 기능 이전의 topics 표(주제 이름이 전체에서 하나뿐, user_id 없음) → 사용자별 주제로 다시 만든다
+        topics_sql = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='topics'").fetchone()[0]
+        if "user_id" not in columns(db, "topics") or "UNIQUE" in topics_sql.upper():
+            db.execute("PRAGMA foreign_keys = OFF")
+            db.executescript(
+                """
+                CREATE TABLE topics_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT,
+                    is_starred INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'in_progress',
+                    mindmap TEXT
+                );
+                INSERT INTO topics_new (id, name, created_at, updated_at, is_starred, status, mindmap)
+                    SELECT id, name, created_at, updated_at, is_starred, status, mindmap FROM topics;
+                DROP TABLE topics;
+                ALTER TABLE topics_new RENAME TO topics;
+                """
+            )
+        # 같은 사람 안에서만 주제 이름이 겹치지 않게
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_topics_user_name ON topics(user_id, name)")
         db.commit()
     finally:
         db.close()
@@ -147,6 +209,156 @@ def touch_topic(db, topic_id):
     db.execute("UPDATE topics SET updated_at = ? WHERE id = ?", (now(), topic_id))
 
 
+# ---------- 회원 · 로그인 ----------
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+GENDERS = ("여성", "남성", "기타", "응답 안 함")
+MIN_AGE = 14  # 만 14세 미만은 법정대리인 동의가 필요해서 가입을 받지 않는다
+_login_fails = {}  # 이메일별 로그인 실패 기록 (간단한 무차별 대입 방지)
+
+
+def current_user_id():
+    return session.get("uid")
+
+
+def login_required(view):
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        if not current_user_id():
+            return jsonify(error="로그인이 필요해요."), 401
+        return view(*args, **kwargs)
+    return wrapper
+
+
+@app.before_request
+def protect_api():
+    """다른 사이트가 몰래 보낸 요청(CSRF)을 막기 위해, 데이터를 바꾸는 API 요청은 JSON만 받는다.
+    (일반 HTML 폼은 JSON을 보낼 수 없고, 다른 사이트의 JSON 요청은 브라우저가 먼저 막는다)"""
+    if request.path.startswith("/api/") and request.method in ("POST", "PATCH", "DELETE"):
+        if not request.is_json:
+            return jsonify(error="잘못된 요청이에요."), 400
+
+
+def user_json(row):
+    return {"id": row["id"], "name": row["name"], "email": row["email"]}
+
+
+@app.post("/api/signup")
+def signup():
+    d = request.get_json(silent=True) or {}
+    name = str(d.get("name", "")).strip()
+    email = str(d.get("email", "")).strip().lower()
+    password = str(d.get("password", ""))
+    confirm = str(d.get("password_confirm", ""))
+    gender = str(d.get("gender", ""))
+    try:
+        age = int(d.get("age"))
+    except (TypeError, ValueError):
+        age = None
+
+    errors = {}
+    if not name:
+        errors["name"] = "이름을 입력해 주세요."
+    elif len(name) > 30:
+        errors["name"] = "이름은 30자 이내로 입력해 주세요."
+    if not EMAIL_RE.match(email):
+        errors["email"] = "이메일 형식이 올바르지 않아요."
+    if len(password) < 8 or not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
+        errors["password"] = "비밀번호는 영문과 숫자를 섞어 8자 이상으로 만들어 주세요."
+    if password != confirm:
+        errors["password_confirm"] = "비밀번호가 서로 달라요."
+    if age is None or not (MIN_AGE <= age <= 120):
+        errors["age"] = f"만 {MIN_AGE}세 이상만 가입할 수 있어요." if age is not None and age < MIN_AGE else "나이를 숫자로 입력해 주세요."
+    if gender not in GENDERS:
+        errors["gender"] = "성별을 골라 주세요."
+    if not d.get("agree"):
+        errors["agree"] = "개인정보 수집·이용에 동의해야 가입할 수 있어요."
+
+    db = get_db()
+    if "email" not in errors and db.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone():
+        errors["email"] = "이미 가입된 이메일이에요."
+    if errors:
+        return jsonify(error="입력한 내용을 확인해 주세요.", fields=errors), 400
+
+    first_user = db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
+    cur = db.execute(
+        "INSERT INTO users (name, email, password_hash, age, gender, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (name, email, generate_password_hash(password), age, gender, now()),
+    )
+    uid = cur.lastrowid
+    if first_user:
+        # 회원 기능이 생기기 전에 혼자 쓰던 기록은 첫 번째 가입자의 것으로 옮긴다
+        db.execute("UPDATE topics SET user_id = ? WHERE user_id IS NULL", (uid,))
+    db.commit()
+    session.clear()
+    session.permanent = True
+    session["uid"] = uid
+    return jsonify(user={"id": uid, "name": name, "email": email}), 201
+
+
+@app.post("/api/login")
+def login():
+    d = request.get_json(silent=True) or {}
+    email = str(d.get("email", "")).strip().lower()
+    password = str(d.get("password", ""))
+    fails = [t for t in _login_fails.get(email, []) if time.time() - t < 300]
+    if len(fails) >= 5:
+        return jsonify(error="로그인 시도가 너무 많아요. 5분 뒤에 다시 시도해 주세요."), 429
+    user = get_db().execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+    if not user or not check_password_hash(user["password_hash"], password):
+        _login_fails[email] = fails + [time.time()]
+        # 어떤 쪽이 틀렸는지 알려 주지 않는다 (가입 여부를 숨기기 위해)
+        return jsonify(error="이메일 또는 비밀번호가 맞지 않아요."), 401
+    _login_fails.pop(email, None)
+    session.clear()
+    session.permanent = True
+    session["uid"] = user["id"]
+    return jsonify(user=user_json(user))
+
+
+@app.post("/api/logout")
+def logout():
+    session.clear()
+    return jsonify(ok=True)
+
+
+@app.delete("/api/me")
+@login_required
+def delete_account():
+    """회원 탈퇴: 비밀번호를 한 번 더 확인하고, 계정과 모든 주제·대화·메모를 지운다."""
+    d = request.get_json(silent=True) or {}
+    db = get_db()
+    user = db.execute("SELECT * FROM users WHERE id = ?", (current_user_id(),)).fetchone()
+    if not user or not check_password_hash(user["password_hash"], str(d.get("password", ""))):
+        return jsonify(error="비밀번호가 맞지 않아요."), 401
+    db.execute("DELETE FROM topics WHERE user_id = ?", (user["id"],))  # 대화는 주제와 함께 지워진다
+    db.execute("DELETE FROM users WHERE id = ?", (user["id"],))
+    db.commit()
+    session.clear()
+    return jsonify(ok=True)
+
+
+@app.get("/api/me")
+def me():
+    uid = current_user_id()
+    user = get_db().execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone() if uid else None
+    if uid and not user:
+        session.clear()
+    return jsonify(user=user_json(user) if user else None)
+
+
+def own_topic(db, topic_id):
+    """로그인한 사람의 주제만 돌려준다. 남의 주제는 '없는 것'으로 취급한다."""
+    return db.execute("SELECT * FROM topics WHERE id = ? AND user_id = ?", (topic_id, current_user_id())).fetchone()
+
+
+def own_turn(db, turn_id):
+    return db.execute(
+        "SELECT u.* FROM turns u JOIN topics t ON t.id = u.topic_id WHERE u.id = ? AND t.user_id = ?",
+        (turn_id, current_user_id()),
+    ).fetchone()
+
+
 # ---------- 주제 ----------
 
 TOPIC_SELECT = """
@@ -158,38 +370,44 @@ TOPIC_SELECT = """
 
 
 @app.get("/api/topics")
+@login_required
 def list_topics():
     q = request.args.get("q", "").strip()
-    sql, params = TOPIC_SELECT, []
+    sql, params = TOPIC_SELECT + " WHERE t.user_id = ?", [current_user_id()]
     if q:
         like = f"%{q}%"
-        sql += """ WHERE t.name LIKE ? OR t.id IN (
+        sql += """ AND (t.name LIKE ? OR t.id IN (
                      SELECT topic_id FROM turns
-                     WHERE question LIKE ? OR my_thought LIKE ? OR ai_answer LIKE ? OR reflection LIKE ?)"""
-        params = [like] * 5
+                     WHERE question LIKE ? OR my_thought LIKE ? OR ai_answer LIKE ? OR reflection LIKE ?))"""
+        params += [like] * 5
     # 중요 표시한 주제를 먼저, 그다음 최근에 대화한 순서
     sql += " GROUP BY t.id ORDER BY t.is_starred DESC, t.updated_at DESC"
     return jsonify([dict(r) for r in get_db().execute(sql, params).fetchall()])
 
 
 @app.post("/api/topics")
+@login_required
 def create_topic():
     name = (request.json or {}).get("name", "").strip()
     if not name:
         return jsonify(error="주제 이름을 입력해 주세요."), 400
     db = get_db()
-    if db.execute("SELECT 1 FROM topics WHERE name = ?", (name,)).fetchone():
+    if db.execute("SELECT 1 FROM topics WHERE name = ? AND user_id = ?", (name, current_user_id())).fetchone():
         return jsonify(error="이미 있는 주제 이름이에요."), 409
     ts = now()
-    cur = db.execute("INSERT INTO topics (name, created_at, updated_at) VALUES (?, ?, ?)", (name, ts, ts))
+    cur = db.execute(
+        "INSERT INTO topics (user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+        (current_user_id(), name, ts, ts),
+    )
     db.commit()
     return jsonify(id=cur.lastrowid), 201
 
 
 @app.get("/api/topics/<int:topic_id>")
+@login_required
 def get_topic(topic_id):
     db = get_db()
-    topic = db.execute(TOPIC_SELECT + " WHERE t.id = ? GROUP BY t.id", (topic_id,)).fetchone()
+    topic = db.execute(TOPIC_SELECT + " WHERE t.id = ? AND t.user_id = ? GROUP BY t.id", (topic_id, current_user_id())).fetchone()
     if not topic:
         return jsonify(error="주제를 찾을 수 없어요."), 404
     turns = db.execute(
@@ -200,9 +418,12 @@ def get_topic(topic_id):
 
 
 @app.patch("/api/topics/<int:topic_id>")
+@login_required
 def update_topic(topic_id):
     data = request.json or {}
     db = get_db()
+    if not own_topic(db, topic_id):
+        return jsonify(error="주제를 찾을 수 없어요."), 404
     if "name" in data:
         name = str(data["name"]).strip()
         if not name:
@@ -220,9 +441,10 @@ def update_topic(topic_id):
 
 
 @app.delete("/api/topics/<int:topic_id>")
+@login_required
 def delete_topic(topic_id):
     db = get_db()
-    db.execute("DELETE FROM topics WHERE id = ?", (topic_id,))
+    db.execute("DELETE FROM topics WHERE id = ? AND user_id = ?", (topic_id, current_user_id()))
     db.commit()
     return jsonify(ok=True)
 
@@ -230,6 +452,7 @@ def delete_topic(topic_id):
 # ---------- 대화 턴 ----------
 
 @app.post("/api/topics/<int:topic_id>/turns")
+@login_required
 def create_turn(topic_id):
     data = request.json or {}
     question = data.get("question", "").strip()
@@ -239,7 +462,7 @@ def create_turn(topic_id):
     if len(thought) < MIN_THOUGHT_LEN:
         return jsonify(error=f"내 생각을 {MIN_THOUGHT_LEN}자 이상 적어야 AI 답을 볼 수 있어요."), 400
     db = get_db()
-    if not db.execute("SELECT 1 FROM topics WHERE id = ?", (topic_id,)).fetchone():
+    if not own_topic(db, topic_id):
         return jsonify(error="주제를 찾을 수 없어요."), 404
     ts = now()
     cur = db.execute(
@@ -253,10 +476,13 @@ def create_turn(topic_id):
 
 
 @app.patch("/api/turns/<int:turn_id>")
+@login_required
 def update_turn(turn_id):
-    """돌아보기만 고칠 수 있다. 질문과 내 생각은 AI 답을 보기 전 그대로 남긴다."""
+    """생각 메모만 고칠 수 있다. 질문과 내 생각은 AI 답을 보기 전 그대로 남긴다."""
     data = request.json or {}
     db = get_db()
+    if not own_turn(db, turn_id):
+        return jsonify(error="대화를 찾을 수 없어요."), 404
     if "reflection" in data:
         db.execute(
             "UPDATE turns SET reflection = ?, updated_at = ? WHERE id = ?",
@@ -267,8 +493,11 @@ def update_turn(turn_id):
 
 
 @app.delete("/api/turns/<int:turn_id>")
+@login_required
 def delete_turn(turn_id):
     db = get_db()
+    if not own_turn(db, turn_id):
+        return jsonify(error="대화를 찾을 수 없어요."), 404
     db.execute("DELETE FROM turns WHERE id = ?", (turn_id,))
     db.commit()
     return jsonify(ok=True)
@@ -303,9 +532,10 @@ def demo_answer(question):
 
 
 @app.post("/api/turns/<int:turn_id>/answer")
+@login_required
 def answer(turn_id):
     db = get_db()
-    turn = db.execute("SELECT * FROM turns WHERE id = ?", (turn_id,)).fetchone()
+    turn = own_turn(db, turn_id)
     if not turn:
         return jsonify(error="대화를 찾을 수 없어요."), 404
     if turn["ai_answer"]:
@@ -481,9 +711,10 @@ def clean_mindmap(data, valid_ids):
 
 
 @app.post("/api/topics/<int:topic_id>/mindmap")
+@login_required
 def mindmap(topic_id):
     db = get_db()
-    topic = db.execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
+    topic = own_topic(db, topic_id)
     if not topic:
         return jsonify(error="주제를 찾을 수 없어요."), 404
     turns = [dict(t) for t in db.execute(
@@ -517,7 +748,7 @@ def mindmap(topic_id):
 
 @app.get("/api/config")
 def config():
-    return jsonify(min_thought=MIN_THOUGHT_LEN, demo=DEMO)
+    return jsonify(min_thought=MIN_THOUGHT_LEN, demo=DEMO, genders=GENDERS, min_age=MIN_AGE)
 
 
 @app.get("/")

@@ -1,4 +1,5 @@
 // 생각 먼저 — 프론트엔드 (프레임워크 없이 해시 라우팅)
+//   #/login, #/signup        로그인 · 회원가입 (로그인 전에는 이 화면만 보인다)
 //   #/                       홈: 주제 목록
 //   #/new                    새 주제 시작
 //   #/topic/:id              주제 > 대화 탭  (?turn=ID 로 특정 대화 위치로 이동)
@@ -9,6 +10,7 @@ const state = {
   q: "",              // 홈 검색어
   filter: "all",      // all | starred | in_progress | done
   drafts: {},         // 주제별 작성 중인 질문/생각 (탭을 오가도 유지)
+  user: undefined,    // 로그인한 사람 (undefined: 아직 모름, null: 로그인 안 함)
 };
 let resizeObs = null;
 
@@ -20,6 +22,11 @@ const api = async (path, opts = {}) => {
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && !path.startsWith("/api/login") && !path.startsWith("/api/me")) {
+    // 로그인이 풀렸으면 로그인 화면으로
+    state.user = null;
+    if (!["#/login", "#/signup"].includes(location.hash)) location.hash = "#/login";
+  }
   if (!res.ok) throw new Error(data.error || "요청에 실패했어요.");
   return data;
 };
@@ -126,7 +133,12 @@ async function viewHome() {
   const mascot = document.getElementById("mascot-template").innerHTML;
   $app.innerHTML = `
     <div class="home">
-      <div class="home-top">${themeToggle()}</div>
+      <div class="home-top">
+        <span class="who">${esc(state.user?.name || "")}</span>
+        <button class="btn btn-ghost btn-sm" id="logout">로그아웃</button>
+        <button class="btn btn-ghost btn-sm danger" id="delete-account">탈퇴</button>
+        ${themeToggle()}
+      </div>
       <header class="home-hero">
         <div class="mascot">${mascot}</div>
         <h1>주제</h1>
@@ -140,6 +152,8 @@ async function viewHome() {
       <ul class="topic-rows" id="topic-rows"></ul>
     </div>`;
 
+  document.getElementById("logout").onclick = logout;
+  document.getElementById("delete-account").onclick = deleteAccount;
   let timer;
   document.getElementById("search").addEventListener("input", (e) => {
     clearTimeout(timer);
@@ -423,7 +437,8 @@ async function streamAnswer(t) {
   $body.innerHTML = "";
   let text = "";
   try {
-    const res = await fetch(`/api/turns/${t.id}/answer`, { method: "POST" });
+    const res = await fetch(`/api/turns/${t.id}/answer`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    if (res.status === 401) { state.user = null; location.hash = "#/login"; return; }
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw new Error(data.error || "AI 답을 받지 못했어요.");
@@ -745,11 +760,204 @@ function drawMapLines($map) {
   svg.innerHTML = d;
 }
 
+// ---------- 로그인 · 회원가입 (브랜드 소개와 함께) ----------
+// 누구를 위한 앱인지, 왜 만들었는지를 로그인 화면 왼쪽에 보여 준다
+function brandPanel() {
+  const mascot = document.getElementById("mascot-template").innerHTML;
+  return `
+    <section class="brand">
+      <div class="brand-mark"><span class="mascot sm">${mascot}</span><span>생각 먼저</span></div>
+      <h1 class="brand-title">AI에게 묻기 전에,<br>내 생각부터.</h1>
+
+      <div class="brand-block">
+        <h2>이런 분을 위해 만들었어요</h2>
+        <ul class="brand-list">
+          <li>AI 답을 읽고 나면, 내가 원래 뭘 생각했는지 기억나지 않는 사람</li>
+          <li>AI에게 묻기는 하는데, 정작 내 생각은 정리가 안 되는 사람</li>
+          <li>AI 답을 그대로 가져다 쓰고 나서 어딘가 찜찜했던 사람</li>
+        </ul>
+      </div>
+
+      <figure class="brand-story">
+        <blockquote>AI를 쓰고 나면 하고 있던 내 생각은 잊어버리고, 어느새 AI의 말을 따라가고 있었어요. 그 불편함에서 이 노트를 만들었습니다.</blockquote>
+        <figcaption>만든 사람의 이야기</figcaption>
+      </figure>
+
+      <ol class="brand-steps">
+        <li><span class="step-num">01</span><div><b>질문을 적어요</b><p>AI에게 물어보고 싶은 걸 먼저 적어요.</p></div></li>
+        <li><span class="step-num">02</span><div><b>내 생각을 먼저 써요</b><p>20자 이상 써야 AI 답이 열려요. 내 생각은 AI에게 보내지 않아요.</p></div></li>
+        <li><span class="step-num">03</span><div><b>AI 답과 비교해요</b><p>겹치는 생각, 나만의 관점, AI만의 관점을 마인드맵으로 나눠 봐요.</p></div></li>
+      </ol>
+    </section>`;
+}
+
+function authShell(formHTML) {
+  $app.innerHTML = `
+    <div class="auth">
+      <div class="auth-top">${themeToggle()}</div>
+      <div class="auth-grid">
+        ${brandPanel()}
+        <section class="auth-card">${formHTML}</section>
+      </div>
+    </div>`;
+}
+
+const field = (id, label, input, hint = "") => `
+  <label class="fld" for="${id}">
+    <span class="fld-label">${label}</span>
+    ${input.replace("<input ", `<input aria-label="${label}" `)}
+    ${hint ? `<span class="fld-hint">${hint}</span>` : ""}
+    <span class="fld-err" data-err="${id}"></span>
+  </label>`;
+
+function showFieldErrors(fields = {}) {
+  document.querySelectorAll("[data-err]").forEach((el) => {
+    const msg = fields[el.dataset.err] || "";
+    el.textContent = msg;
+    el.closest(".fld, .agree")?.classList.toggle("has-err", !!msg);
+  });
+}
+
+function viewLogin() {
+  authShell(`
+    <h2 class="auth-title">로그인</h2>
+    <p class="auth-sub">내가 남긴 질문과 생각은 나만 볼 수 있어요.</p>
+    <form id="login-form" novalidate>
+      ${field("email", "이메일", `<input type="text" id="email" inputmode="email" autocomplete="email" required>`)}
+      ${field("password", "비밀번호", `<input type="password" id="password" autocomplete="current-password" required>`)}
+      <p class="form-err" id="form-err" role="alert"></p>
+      <button class="btn btn-primary btn-block" type="submit">로그인</button>
+    </form>
+    <p class="auth-switch">아직 계정이 없나요? <a href="#/signup">회원가입</a></p>`);
+  const $f = document.getElementById("login-form");
+  $f.onsubmit = async (e) => {
+    e.preventDefault();
+    const $btn = $f.querySelector("button[type=submit]");
+    $btn.disabled = true;
+    try {
+      const { user } = await api("/api/login", { method: "POST", body: { email: $f.email.value, password: $f.password.value } });
+      state.user = user;
+      location.hash = "#/";
+    } catch (err) {
+      document.getElementById("form-err").textContent = err.message;
+      $btn.disabled = false;
+    }
+  };
+  document.getElementById("email").focus();
+}
+
+function viewSignup() {
+  const genders = cfg.genders || ["여성", "남성", "기타", "응답 안 함"];
+  authShell(`
+    <h2 class="auth-title">회원가입</h2>
+    <p class="auth-sub">가입하면 내 주제와 대화가 내 계정에만 저장돼요.</p>
+    <form id="signup-form" novalidate>
+      ${field("name", "이름", `<input type="text" id="name" autocomplete="name" maxlength="30" required>`)}
+      ${field("email", "이메일", `<input type="text" id="email" inputmode="email" autocomplete="email" required>`)}
+      ${field("password", "비밀번호", `<input type="password" id="password" autocomplete="new-password" required>`, "영문과 숫자를 섞어 8자 이상")}
+      ${field("password_confirm", "비밀번호 확인", `<input type="password" id="password_confirm" autocomplete="new-password" required>`)}
+      <div class="fld-row">
+        ${field("age", "나이", `<input type="number" id="age" inputmode="numeric" min="${cfg.min_age || 14}" max="120" required>`, `만 ${cfg.min_age || 14}세 이상`)}
+        <div class="fld">
+          <span class="fld-label">성별</span>
+          <div class="seg" role="radiogroup" aria-label="성별">
+            ${genders.map((g) => `<label><input type="radio" name="gender" value="${esc(g)}"><span>${esc(g)}</span></label>`).join("")}
+          </div>
+          <span class="fld-err" data-err="gender"></span>
+        </div>
+      </div>
+      <div class="agree">
+        <label><input type="checkbox" id="agree"> <span>개인정보 수집·이용에 동의해요 (필수)</span></label>
+        <details>
+          <summary>자세히 보기</summary>
+          <ul>
+            <li>수집 항목: 이름, 이메일, 비밀번호(암호화해서 저장), 나이, 성별</li>
+            <li>이용 목적: 로그인과 내 기록 구분, 나이·성별에 따른 사용 경향 분석(개인을 알아볼 수 없는 통계로만)</li>
+            <li>보관 기간: 탈퇴할 때까지. 탈퇴하면 계정과 모든 기록을 바로 지워요.</li>
+          </ul>
+        </details>
+        <span class="fld-err" data-err="agree"></span>
+      </div>
+      <p class="form-err" id="form-err" role="alert"></p>
+      <button class="btn btn-primary btn-block" type="submit">가입하고 시작하기</button>
+    </form>
+    <p class="auth-switch">이미 계정이 있나요? <a href="#/login">로그인</a></p>`);
+
+  const $f = document.getElementById("signup-form");
+  // 비밀번호 확인은 입력하는 동안 바로 알려 준다
+  const checkConfirm = () => {
+    const c = $f.password_confirm.value;
+    showFieldErrors({ ...currentErrors, password_confirm: c && c !== $f.password.value ? "비밀번호가 서로 달라요." : "" });
+  };
+  let currentErrors = {};
+  $f.password_confirm.addEventListener("input", checkConfirm);
+  $f.password.addEventListener("input", () => { if ($f.password_confirm.value) checkConfirm(); });
+
+  $f.onsubmit = async (e) => {
+    e.preventDefault();
+    const $btn = $f.querySelector("button[type=submit]");
+    $btn.disabled = true;
+    document.getElementById("form-err").textContent = "";
+    const body = {
+      name: $f.name.value, email: $f.email.value, password: $f.password.value,
+      password_confirm: $f.password_confirm.value, age: $f.age.value,
+      gender: $f.querySelector("input[name=gender]:checked")?.value || "", agree: $f.agree.checked,
+    };
+    try {
+      const res = await fetch("/api/signup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        currentErrors = data.fields || {};
+        showFieldErrors(currentErrors);
+        document.getElementById("form-err").textContent = data.error || "가입하지 못했어요.";
+        $f.querySelector(".has-err input")?.focus();
+        $btn.disabled = false;
+        return;
+      }
+      state.user = data.user;
+      location.hash = "#/";
+    } catch (err) {
+      document.getElementById("form-err").textContent = "서버에 연결하지 못했어요.";
+      $btn.disabled = false;
+    }
+  };
+  document.getElementById("name").focus();
+}
+
+async function logout() {
+  await api("/api/logout", { method: "POST" }).catch(() => {});
+  state.user = null;
+  state.drafts = {};
+  location.hash = "#/login";
+}
+
+async function deleteAccount() {
+  if (!confirm("탈퇴하면 계정과 모든 주제·대화·생각 메모가 바로 지워지고 되돌릴 수 없어요. 계속할까요?")) return;
+  const password = prompt("확인을 위해 비밀번호를 입력해 주세요.");
+  if (!password) return;
+  try {
+    await api("/api/me", { method: "DELETE", body: { password } });
+    state.user = null;
+    toast("탈퇴했어요. 그동안 고마웠어요.");
+    location.hash = "#/login";
+  } catch (err) { toast(err.message); }
+}
+
 // ---------- 라우터 ----------
 async function route() {
   if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
   const [path, query] = location.hash.replace(/^#/, "").split("?");
   const qs = new URLSearchParams(query || "");
+  // 로그인 확인: 로그인 전에는 로그인·회원가입 화면만 보여 준다
+  if (state.user === undefined) {
+    state.user = (await api("/api/me").catch(() => ({ user: null }))).user;
+  }
+  const authPage = path === "/login" || path === "/signup";
+  if (!state.user && !authPage) { location.replace("#/login"); return; }
+  if (state.user && authPage) { location.replace("#/"); return; }
+  window.scrollTo(0, 0);
+  if (path === "/login") return viewLogin();
+  if (path === "/signup") return viewSignup();
   let m;
   if (path === "/new") viewNewTopic();
   else if ((m = path.match(/^\/topic\/(\d+)\/map$/))) { window.scrollTo(0, 0); await viewTopic(Number(m[1]), "map"); }
