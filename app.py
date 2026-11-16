@@ -1,12 +1,15 @@
-"""생각 먼저 (Think First)
+"""비포블랭크 Before Blank (줄여서 비비)
 
 AI에게 묻기 전에 내 생각을 먼저 적고, 그다음에 AI의 답을 보는 질문 노트.
 주제 1개에 대화 턴(질문 · 내 생각 · AI 답) N개가 쌓이고,
 주제마다 내 생각과 AI 답을 비교하는 수렴형 마인드맵을 만든다.
 """
 
+import hashlib
+import base64
 import json
 import os
+import uuid
 import re
 import secrets
 import sqlite3
@@ -18,8 +21,10 @@ from pathlib import Path
 
 import anthropic
 from dotenv import load_dotenv
-from flask import Flask, Response, g, jsonify, request, send_from_directory, session
+from flask import Flask, Response, g, jsonify, request, send_file, send_from_directory, session
 from werkzeug.security import check_password_hash, generate_password_hash
+import smtplib
+from email.message import EmailMessage
 
 BASE_DIR = Path(__file__).resolve().parent
 def _arg(name, default=None):
@@ -57,6 +62,16 @@ def _secret_key():
 
 
 app.secret_key = _secret_key()
+
+# 첨부파일: 질문에 붙이는 자료. AI가 함께 읽고, 마인드맵의 '첨부 자료'로 정리된다
+UPLOAD_DIR = DB_PATH.parent / "uploads"
+ALLOWED_FILES = {  # 확장자: (MIME, 종류)
+    ".txt": ("text/plain", "text"), ".md": ("text/markdown", "text"), ".csv": ("text/csv", "text"),
+    ".pdf": ("application/pdf", "pdf"),
+    ".png": ("image/png", "image"), ".jpg": ("image/jpeg", "image"), ".jpeg": ("image/jpeg", "image"), ".webp": ("image/webp", "image"),
+}
+MAX_FILE_MB, MAX_FILES_PER_TURN = 5, 3
+app.config["MAX_CONTENT_LENGTH"] = (MAX_FILE_MB * MAX_FILES_PER_TURN + 1) * 1024 * 1024
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,      # 자바스크립트에서 로그인 쿠키를 읽을 수 없게
     SESSION_COOKIE_SAMESITE="Lax",     # 다른 사이트에서 보낸 요청에는 쿠키가 붙지 않게
@@ -114,6 +129,24 @@ def init_db():
                 age INTEGER NOT NULL,
                 gender TEXT NOT NULL,
                 created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS attachments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                turn_id INTEGER NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                filename TEXT NOT NULL,
+                mime TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                stored_name TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS password_resets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                token_hash TEXT NOT NULL UNIQUE,
+                expires_at TEXT NOT NULL,
+                used_at TEXT
             );
             CREATE TABLE IF NOT EXISTS folders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -246,6 +279,8 @@ def protect_api():
     """다른 사이트가 몰래 보낸 요청(CSRF)을 막기 위해, 데이터를 바꾸는 API 요청은 JSON만 받는다.
     (일반 HTML 폼은 JSON을 보낼 수 없고, 다른 사이트의 JSON 요청은 브라우저가 먼저 막는다)"""
     if request.path.startswith("/api/") and request.method in ("POST", "PATCH", "DELETE"):
+        if request.path.endswith("/attachments") and request.headers.get("X-BB-Upload") == "1":
+            return None
         if not request.is_json:
             return jsonify(error="잘못된 요청이에요."), 400
 
@@ -327,6 +362,95 @@ def login():
     return jsonify(user=user_json(user))
 
 
+# ---------- 비밀번호 찾기 (재설정 링크) ----------
+RESET_MINUTES = 30
+_reset_requests = {}  # 이메일별 요청 시각 (짧은 시간에 여러 번 보내지 못하게)
+
+
+def password_error(password, confirm):
+    if len(password) < 8 or not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
+        return "password", "비밀번호는 영문과 숫자를 섞어 8자 이상으로 만들어 주세요."
+    if password != confirm:
+        return "password_confirm", "비밀번호가 서로 달라요."
+    return None
+
+
+def send_reset_mail(to, name, link):
+    """SMTP 설정(.env)이 있으면 메일로 보내고, 없으면 서버 콘솔에 링크를 남긴다(로컬 개발용)."""
+    host = os.environ.get("SMTP_HOST")
+    if not host:
+        print(f"[비밀번호 재설정] SMTP 설정이 없어 메일 대신 여기에 남겨요: {to} → {link}", flush=True)
+        return False
+    msg = EmailMessage()
+    msg["Subject"] = "[비포블랭크] 비밀번호 재설정 링크"
+    msg["From"] = os.environ.get("MAIL_FROM", os.environ.get("SMTP_USER", ""))
+    msg["To"] = to
+    msg.set_content(
+        f"{name}님, 비밀번호 재설정을 요청하셨어요.\n\n"
+        f"아래 링크를 {RESET_MINUTES}분 안에 열어 새 비밀번호를 정해 주세요.\n{link}\n\n"
+        "직접 요청하지 않았다면 이 메일은 무시하셔도 돼요. 비밀번호는 바뀌지 않아요."
+    )
+    with smtplib.SMTP(host, int(os.environ.get("SMTP_PORT", 587)), timeout=10) as smtp:
+        smtp.starttls()
+        if os.environ.get("SMTP_USER"):
+            smtp.login(os.environ["SMTP_USER"], os.environ.get("SMTP_PASSWORD", ""))
+        smtp.send_message(msg)
+    return True
+
+
+@app.post("/api/password/forgot")
+def forgot_password():
+    email = str((request.json or {}).get("email", "")).strip().lower()
+    generic = "가입된 이메일이라면 비밀번호 재설정 링크를 보냈어요. 메일함을 확인해 주세요."
+    recent = [t for t in _reset_requests.get(email, []) if time.time() - t < 900]
+    if len(recent) >= 3:
+        return jsonify(error="요청이 너무 많아요. 15분 뒤에 다시 시도해 주세요."), 429
+    _reset_requests[email] = recent + [time.time()]
+    db = get_db()
+    user = db.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+    out = {"message": generic}
+    if user:
+        token = secrets.token_urlsafe(32)
+        expires = (datetime.now() + timedelta(minutes=RESET_MINUTES)).isoformat(timespec="seconds")
+        # 이전에 보낸 링크는 무효로 하고, DB에는 토큰 원문이 아니라 해시만 저장
+        db.execute("UPDATE password_resets SET used_at = ? WHERE user_id = ? AND used_at IS NULL", (now(), user["id"]))
+        db.execute(
+            "INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES (?, ?, ?)",
+            (user["id"], hashlib.sha256(token.encode()).hexdigest(), expires),
+        )
+        db.commit()
+        link = f"{request.host_url}#/reset?token={token}"
+        try:
+            sent = send_reset_mail(email, user["name"], link)
+        except (OSError, smtplib.SMTPException) as e:
+            print(f"[비밀번호 재설정] 메일 보내기 실패: {e}", flush=True)
+            sent = False
+        if not sent and (DEMO or os.environ.get("SHOW_RESET_LINK") == "1"):
+            out["dev_link"] = link  # 로컬 체험용: 메일 서버가 없을 때 화면에서 바로 열 수 있게
+    # 가입 여부와 상관없이 같은 답을 준다 (가입된 이메일인지 알아낼 수 없게)
+    return jsonify(out)
+
+
+@app.post("/api/password/reset")
+def reset_password():
+    d = request.get_json(silent=True) or {}
+    token = str(d.get("token", ""))
+    db = get_db()
+    row = db.execute(
+        "SELECT * FROM password_resets WHERE token_hash = ?", (hashlib.sha256(token.encode()).hexdigest(),)
+    ).fetchone()
+    if not row or row["used_at"] or row["expires_at"] < now():
+        return jsonify(error="링크가 만료됐거나 이미 사용됐어요. 비밀번호 찾기를 다시 요청해 주세요."), 400
+    err = password_error(str(d.get("password", "")), str(d.get("password_confirm", "")))
+    if err:
+        return jsonify(error="입력한 내용을 확인해 주세요.", fields={err[0]: err[1]}), 400
+    db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (generate_password_hash(d["password"]), row["user_id"]))
+    db.execute("UPDATE password_resets SET used_at = ? WHERE user_id = ? AND used_at IS NULL", (now(), row["user_id"]))
+    db.commit()
+    session.clear()
+    return jsonify(ok=True)
+
+
 @app.post("/api/logout")
 def logout():
     session.clear()
@@ -342,6 +466,7 @@ def delete_account():
     user = db.execute("SELECT * FROM users WHERE id = ?", (current_user_id(),)).fetchone()
     if not user or not check_password_hash(user["password_hash"], str(d.get("password", ""))):
         return jsonify(error="비밀번호가 맞지 않아요."), 401
+    remove_files(db.execute("SELECT stored_name FROM attachments WHERE user_id = ?", (user["id"],)).fetchall())
     db.execute("DELETE FROM topics WHERE user_id = ?", (user["id"],))  # 대화는 주제와 함께 지워진다
     db.execute("DELETE FROM users WHERE id = ?", (user["id"],))
     db.commit()
@@ -440,6 +565,107 @@ def delete_folder(folder_id):
     return jsonify(ok=True)
 
 
+# ---------- 첨부파일 ----------
+
+def remove_files(rows):
+    for r in rows:
+        try:
+            (UPLOAD_DIR / r["stored_name"]).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def attachments_of(db, turn_ids):
+    if not turn_ids:
+        return {}
+    q = ",".join("?" * len(turn_ids))
+    out = {}
+    for r in db.execute(f"SELECT id, turn_id, filename, mime, kind, size FROM attachments WHERE turn_id IN ({q}) ORDER BY id", list(turn_ids)):
+        out.setdefault(r["turn_id"], []).append({k: r[k] for k in ("id", "filename", "mime", "kind", "size")})
+    return out
+
+
+@app.post("/api/turns/<int:turn_id>/attachments")
+@login_required
+def upload_attachments(turn_id):
+    db = get_db()
+    turn = own_turn(db, turn_id)
+    if not turn:
+        return jsonify(error="대화를 찾을 수 없어요."), 404
+    if turn["ai_answer"]:
+        return jsonify(error="AI 답을 받은 뒤에는 자료를 더 붙일 수 없어요."), 400
+    files = request.files.getlist("files")
+    have = db.execute("SELECT COUNT(*) FROM attachments WHERE turn_id = ?", (turn_id,)).fetchone()[0]
+    if not files:
+        return jsonify(error="파일을 골라 주세요."), 400
+    if have + len(files) > MAX_FILES_PER_TURN:
+        return jsonify(error=f"질문 하나에 자료는 {MAX_FILES_PER_TURN}개까지 붙일 수 있어요."), 400
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    saved = []
+    for f in files:
+        name = Path(f.filename or "").name[:120] or "file"
+        ext = Path(name).suffix.lower()
+        if ext not in ALLOWED_FILES:
+            return jsonify(error=f"'{name}'은(는) 붙일 수 없는 형식이에요. (txt, md, csv, pdf, png, jpg, webp)"), 400
+        data = f.read(MAX_FILE_MB * 1024 * 1024 + 1)
+        if len(data) > MAX_FILE_MB * 1024 * 1024:
+            return jsonify(error=f"'{name}'이(가) {MAX_FILE_MB}MB보다 커요."), 400
+        if not data:
+            return jsonify(error=f"'{name}'이(가) 비어 있어요."), 400
+        mime, kind = ALLOWED_FILES[ext]
+        stored = f"{uuid.uuid4().hex}{ext}"  # 저장 이름은 무작위로 (원래 이름은 DB에만)
+        (UPLOAD_DIR / stored).write_bytes(data)
+        cur = db.execute(
+            "INSERT INTO attachments (turn_id, user_id, filename, mime, kind, size, stored_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (turn_id, current_user_id(), name, mime, kind, len(data), stored, now()),
+        )
+        saved.append({"id": cur.lastrowid, "filename": name, "mime": mime, "kind": kind, "size": len(data)})
+    db.commit()
+    return jsonify(saved), 201
+
+
+@app.get("/api/attachments/<int:att_id>")
+@login_required
+def download_attachment(att_id):
+    row = get_db().execute("SELECT * FROM attachments WHERE id = ? AND user_id = ?", (att_id, current_user_id())).fetchone()
+    if not row:
+        return jsonify(error="파일을 찾을 수 없어요."), 404
+    resp = send_file(UPLOAD_DIR / row["stored_name"], mimetype=row["mime"], as_attachment=True, download_name=row["filename"])
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
+def read_text_file(path, limit=30000):
+    raw = path.read_bytes()
+    for enc in ("utf-8-sig", "cp949"):  # 한국어 CSV는 cp949인 경우가 많다
+        try:
+            return raw.decode(enc)[:limit]
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")[:limit]
+
+
+def attachment_blocks(db, turn_id):
+    """Claude에게 보낼 첨부 자료 블록: 텍스트는 글로, PDF는 문서로, 그림은 이미지로."""
+    blocks = []
+    for r in db.execute("SELECT * FROM attachments WHERE turn_id = ? ORDER BY id", (turn_id,)):
+        path = UPLOAD_DIR / r["stored_name"]
+        if not path.exists():
+            continue
+        label = f'<attachment id="{r["id"]}" name="{r["filename"]}">'
+        if r["kind"] == "text":
+            blocks.append({"type": "text", "text": f"{label}\n{read_text_file(path)}\n</attachment>"})
+        else:
+            data = base64.standard_b64encode(path.read_bytes()).decode()
+            blocks.append({"type": "text", "text": label})
+            if r["kind"] == "pdf":
+                blocks.append({"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": data}})
+            else:
+                blocks.append({"type": "image", "source": {"type": "base64", "media_type": r["mime"], "data": data}})
+            blocks.append({"type": "text", "text": "</attachment>"})
+    return blocks
+
+
 # ---------- 주제 ----------
 
 TOPIC_SELECT = """
@@ -494,11 +720,14 @@ def get_topic(topic_id):
     topic = db.execute(TOPIC_SELECT + " WHERE t.id = ? AND t.user_id = ? GROUP BY t.id", (topic_id, current_user_id())).fetchone()
     if not topic:
         return jsonify(error="주제를 찾을 수 없어요."), 404
-    turns = db.execute(
+    turns = [dict(t) for t in db.execute(
         "SELECT id, question, my_thought, ai_answer, reflection, created_at FROM turns WHERE topic_id = ? ORDER BY id",
         (topic_id,),
-    ).fetchall()
-    return jsonify(topic=dict(topic), turns=[dict(t) for t in turns])
+    )]
+    atts = attachments_of(db, [t["id"] for t in turns])
+    for t in turns:
+        t["attachments"] = atts.get(t["id"], [])
+    return jsonify(topic=dict(topic), turns=turns)
 
 
 @app.patch("/api/topics/<int:topic_id>")
@@ -533,6 +762,10 @@ def update_topic(topic_id):
 @login_required
 def delete_topic(topic_id):
     db = get_db()
+    remove_files(db.execute(
+        "SELECT a.stored_name FROM attachments a JOIN turns u ON u.id = a.turn_id JOIN topics t ON t.id = u.topic_id WHERE t.id = ? AND t.user_id = ?",
+        (topic_id, current_user_id()),
+    ).fetchall())
     db.execute("DELETE FROM topics WHERE id = ? AND user_id = ?", (topic_id, current_user_id()))
     db.commit()
     return jsonify(ok=True)
@@ -587,6 +820,7 @@ def delete_turn(turn_id):
     db = get_db()
     if not own_turn(db, turn_id):
         return jsonify(error="대화를 찾을 수 없어요."), 404
+    remove_files(db.execute("SELECT stored_name FROM attachments WHERE turn_id = ?", (turn_id,)).fetchall())
     db.execute("DELETE FROM turns WHERE id = ?", (turn_id,))
     db.commit()
     return jsonify(ok=True)
@@ -603,12 +837,17 @@ def history_messages(db, turn):
     ):
         msgs.append({"role": "user", "content": t["question"]})
         msgs.append({"role": "assistant", "content": t["ai_answer"]})
-    msgs.append({"role": "user", "content": turn["question"]})
+    blocks = attachment_blocks(db, turn["id"])
+    if blocks:
+        msgs.append({"role": "user", "content": blocks + [{"type": "text", "text": "위 첨부 자료를 참고해서 답해 주세요.\n\n" + turn["question"]}]})
+    else:
+        msgs.append({"role": "user", "content": turn["question"]})
     return msgs
 
 
-def demo_answer(question):
+def demo_answer(question, files=()):
     text = (
+        (f"(첨부 자료 {', '.join(files)}를 함께 읽었어요.)\n\n" if files else "") +
         f"## 핵심\n'{question}'에 대해서는 세 가지를 함께 보면 좋아요.\n\n"
         "- **목표를 먼저 분명히** 하기: 무엇을 얻고 싶은지에 따라 방법이 달라져요.\n"
         "- **작게 시작해서 반복**하기: 한 번에 완벽하게 하기보다 짧게 시도하고 고쳐 가요.\n"
@@ -634,6 +873,8 @@ def answer(turn_id):
 
     messages = history_messages(db, turn)
     topic_id = turn["topic_id"]
+    # 스트리밍은 요청이 끝난 뒤에도 이어지므로, DB에서 필요한 값은 미리 읽어 둔다
+    att_names = [r["filename"] for r in db.execute("SELECT filename FROM attachments WHERE turn_id = ?", (turn_id,))]
 
     def claude_stream():
         client = anthropic.Anthropic()
@@ -656,7 +897,7 @@ def answer(turn_id):
         # AI에게는 질문(과 이전 질문·답)만 보낸다. 내 생각은 보내지 않아서
         # AI 답이 내 생각에 맞춰지지 않고, 둘을 독립적으로 비교할 수 있다.
         parts = []
-        source = demo_answer(turn["question"]) if DEMO else claude_stream()
+        source = demo_answer(turn["question"], att_names) if DEMO else claude_stream()
         try:
             for text in source:
                 parts.append(text)
@@ -722,15 +963,27 @@ UNCERTAIN_POINT = {
     "required": ["mine_label", "ai_label", "shared_label", "question", "turn_ids"],
     "additionalProperties": False,
 }
+MATERIAL = {
+    "type": "object",
+    "properties": {
+        "attachment_id": {"type": "integer"},
+        "summary": {"type": "string"},
+        "key_points": {"type": "array", "items": {"type": "string"}},
+        "relation": {"type": "string"},
+    },
+    "required": ["attachment_id", "summary", "key_points", "relation"],
+    "additionalProperties": False,
+}
 MINDMAP_SCHEMA = {
     "type": "object",
     "properties": {
+        "materials": {"type": "array", "items": MATERIAL},
         "mine_only": {"type": "array", "items": POINT},
         "shared": {"type": "array", "items": SHARED_POINT},
         "ai_only": {"type": "array", "items": POINT},
         "uncertain": {"type": "array", "items": UNCERTAIN_POINT},
     },
-    "required": ["mine_only", "shared", "ai_only", "uncertain"],
+    "required": ["materials", "mine_only", "shared", "ai_only", "uncertain"],
     "additionalProperties": False,
 }
 
@@ -747,21 +1000,25 @@ MINDMAP_PROMPT = """아래는 '{topic}' 주제로 나눈 대화입니다. 각 �
   mine_label·ai_label은 각 쪽 요점(15자 안팎), shared_label은 겹친다고 볼 때의 공통 요점,
   question은 사용자에게 물을 한 문장 질문(예: "'작게 시작하기'와 'MVP부터 만들기'를 같은 생각으로 볼까요?"). 확실한 것만 있으면 빈 배열.
 
+- materials: 질문에 첨부 자료(<attachment id="...">)가 있으면 자료마다 하나씩. summary는 자료 내용 2문장 요약,
+  key_points는 자료의 핵심 3~5개(각 20자 안팎), relation은 이 자료가 사용자 생각·AI 답과 어떻게 이어지는지 한 문장. 첨부가 없으면 빈 배열.
+
 {turns}"""
 
 
-def turns_signature(turns):
-    return [t["id"] for t in turns]
+def turns_signature(turns, att_ids=()):
+    # 대화나 첨부 자료가 바뀌면 서명이 달라져 마인드맵을 다시 만든다
+    return [t["id"] for t in turns] + [f"a{a}" for a in att_ids]
 
 
-def build_mindmap(topic_name, turns):
+def build_mindmap(topic_name, turns, db=None):
     if DEMO:
-        return demo_mindmap(turns)
-    body = "\n".join(
-        f'<turn id="{t["id"]}">\n<question>{t["question"]}</question>\n'
-        f'<my_thought>{t["my_thought"]}</my_thought>\n<ai_answer>{t["ai_answer"]}</ai_answer>\n</turn>'
-        for t in turns
-    )
+        return demo_mindmap(turns, db)
+    content = [{"type": "text", "text": MINDMAP_PROMPT.split("{turns}")[0].format(topic=topic_name)}]
+    for t in turns:
+        content.append({"type": "text", "text": f'<turn id="{t["id"]}">\n<question>{t["question"]}</question>'})
+        content += attachment_blocks(db, t["id"]) if db is not None else []
+        content.append({"type": "text", "text": f'<my_thought>{t["my_thought"]}</my_thought>\n<ai_answer>{t["ai_answer"]}</ai_answer>\n</turn>'})
     client = anthropic.Anthropic()
     resp = client.beta.messages.create(
         model=MODEL,
@@ -769,7 +1026,7 @@ def build_mindmap(topic_name, turns):
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": MINDMAP_SCHEMA}},
         betas=["server-side-fallback-2026-07-01"],
         fallbacks="default",
-        messages=[{"role": "user", "content": MINDMAP_PROMPT.format(topic=topic_name, turns=body)}],
+        messages=[{"role": "user", "content": content}],
     )
     if resp.stop_reason == "refusal":
         raise ValueError("AI가 이 내용은 정리하지 않았어요.")
@@ -777,7 +1034,7 @@ def build_mindmap(topic_name, turns):
     return json.loads(text)
 
 
-def demo_mindmap(turns):
+def demo_mindmap(turns, db=None):
     """데모 모드: 턴마다 내 생각 첫 문장, 공통 요점, AI 답 첫 요점을 하나씩 뽑는다."""
     def short(s, n=16):
         s = re.sub(r"[#*`\-\n]+", " ", s).strip()
@@ -805,12 +1062,29 @@ def demo_mindmap(turns):
             "label": "기록하며 비교하기", "detail": "여러 턴에 걸쳐 근거를 남기자는 생각이 겹쳐요.",
             "kind": "similar", "turn_ids": [t["id"] for t in turns],
         })
+    mm["materials"] = []
+    if db is not None:
+        for t in turns:
+            for r in db.execute("SELECT id, filename FROM attachments WHERE turn_id = ?", (t["id"],)):
+                mm["materials"].append({
+                    "attachment_id": r["id"], "summary": f"'{r['filename']}' 자료의 요약이에요. (데모 모드)",
+                    "key_points": ["자료의 첫 번째 핵심", "자료의 두 번째 핵심", "자료의 세 번째 핵심"],
+                    "relation": "내 생각의 근거를 보완해 주는 자료예요. (데모 모드)",
+                })
     return mm
 
 
-def clean_mindmap(data, valid_ids):
+def clean_mindmap(data, valid_ids, att_turn=None):
     """AI가 만든 결과 정리: 존재하지 않는 turn_id는 버리고, 근거 턴이 하나도 없는 요점은 뺀다."""
-    out = {}
+    att_turn = att_turn or {}
+    out = {"materials": []}
+    for m in data.get("materials", []):
+        aid = m.get("attachment_id")
+        if aid in att_turn:  # 이 주제에 실제로 있는 첨부만
+            out["materials"].append({
+                "attachment_id": aid, "turn_ids": [att_turn[aid]], "summary": str(m.get("summary", ""))[:400],
+                "key_points": [str(k)[:60] for k in m.get("key_points", [])][:6], "relation": str(m.get("relation", ""))[:200],
+            })
     for key in ("mine_only", "shared", "ai_only", "uncertain"):
         items = []
         for p in data.get(key, []):
@@ -864,11 +1138,17 @@ def mindmap(topic_id):
     if not turns:
         return jsonify(empty=True)
 
-    sig = turns_signature(turns)
+    att_rows = db.execute(
+        f"SELECT id, turn_id, filename FROM attachments WHERE turn_id IN ({','.join('?' * len(turns))}) ORDER BY id",
+        [t["id"] for t in turns],
+    ).fetchall()
+    att_turn = {r["id"]: r["turn_id"] for r in att_rows}
+    sig = turns_signature(turns, [r["id"] for r in att_rows])
     cached = json.loads(topic["mindmap"]) if topic["mindmap"] else None
     refresh = (request.json or {}).get("refresh")
     if cached and not refresh:
         cached.setdefault("uncertain", [])
+        cached.setdefault("materials", [])
         if cached.get("signature") == sig:
             return jsonify(cached)
         if cached.get("edited"):
@@ -877,7 +1157,7 @@ def mindmap(topic_id):
     if not DEMO and not os.environ.get("ANTHROPIC_API_KEY"):
         return jsonify(error="ANTHROPIC_API_KEY가 설정되지 않았어요. think-first/.env 파일을 확인해 주세요."), 500
     try:
-        data = clean_mindmap(build_mindmap(topic["name"], turns), set(sig))
+        data = clean_mindmap(build_mindmap(topic["name"], turns, db), {t["id"] for t in turns}, att_turn)
     except anthropic.APIStatusError as e:
         return jsonify(error=f"API 응답 오류 ({e.status_code})"), 502
     except anthropic.APIConnectionError:
@@ -906,7 +1186,8 @@ def edit_mindmap(topic_id):
         data = validate_user_mindmap(request.json or {}, valid)
     except (ValueError, TypeError) as e:
         return jsonify(error=str(e)), 400
-    data.update(signature=cached.get("signature", []), created_at=cached.get("created_at"), edited=True, edited_at=now())
+    data.update(signature=cached.get("signature", []), created_at=cached.get("created_at"), edited=True, edited_at=now(),
+                materials=cached.get("materials", []))
     db.execute("UPDATE topics SET mindmap = ? WHERE id = ?", (json.dumps(data, ensure_ascii=False), topic_id))
     db.commit()
     return jsonify(data)

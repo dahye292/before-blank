@@ -1,5 +1,6 @@
-// 생각 먼저 — 프론트엔드 (프레임워크 없이 해시 라우팅)
+// 비포블랭크(Before Blank, 비비) — 프론트엔드 (프레임워크 없이 해시 라우팅)
 //   #/login, #/signup        로그인 · 회원가입 (로그인 전에는 이 화면만 보인다)
+//   #/forgot, #/reset?token= 비밀번호 찾기 · 새 비밀번호 정하기
 //   #/                       홈: 주제 목록
 //   #/new                    새 주제 시작
 //   #/topic/:id              주제 > 대화 탭  (?turn=ID 로 특정 대화 위치로 이동)
@@ -51,6 +52,45 @@ function toast(msg) {
   setTimeout(() => t.remove(), 2400);
 }
 
+// 확인·입력 대화상자. 확인하면 true(입력칸이 있으면 입력한 글), 취소하면 null
+function ask({ title, message = "", input = null, confirmText = "확인", cancelText = "취소", danger = false }) {
+  return new Promise((resolve) => {
+    const prevFocus = document.activeElement;
+    const wrap = document.createElement("div");
+    wrap.className = "dlg-backdrop";
+    wrap.innerHTML = `
+      <form class="dlg" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+        <h2 id="dlg-title">${esc(title)}</h2>
+        ${message ? `<p class="dlg-msg">${esc(message)}</p>` : ""}
+        ${input ? `<input class="dlg-input" type="${input.type || "text"}" maxlength="${input.maxlength || 40}"
+            value="${esc(input.value || "")}" placeholder="${esc(input.placeholder || "")}" aria-label="${esc(title)}" autocomplete="off">` : ""}
+        <p class="form-err" role="alert"></p>
+        <div class="dlg-btns">
+          <button type="button" class="btn" data-dlg="cancel">${esc(cancelText)}</button>
+          <button type="submit" class="btn btn-primary ${danger ? "danger-solid" : ""}">${esc(confirmText)}</button>
+        </div>
+      </form>`;
+    document.body.appendChild(wrap);
+    const form = wrap.querySelector("form");
+    const $in = wrap.querySelector(".dlg-input");
+    const close = (val) => { wrap.remove(); document.removeEventListener("keydown", onKey); prevFocus?.focus?.(); resolve(val); };
+    const onKey = (e) => { if (e.key === "Escape") close(null); };
+    document.addEventListener("keydown", onKey);
+    wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) close(null); });
+    wrap.querySelector('[data-dlg="cancel"]').onclick = () => close(null);
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      if ($in) {
+        const v = $in.value.trim();
+        if (!v) { wrap.querySelector(".form-err").textContent = "내용을 입력해 주세요."; $in.focus(); return; }
+        close(v);
+      } else close(true);
+    };
+    ($in || form.querySelector("[type=submit]")).focus();
+    if ($in) $in.select();
+  });
+}
+
 const statusBadge = (s) =>
   s === "done" ? `<span class="status done"><i></i>완료</span>` : `<span class="status in_progress"><i></i>진행중</span>`;
 
@@ -64,14 +104,24 @@ function paintStatusToggle($btn, s) {
 
 // 테마: 기본은 어두운 화면. 고른 값은 이 브라우저에 기억한다
 const currentTheme = () => document.documentElement.dataset.theme === "light" ? "light" : "dark";
-const themeToggle = () =>
-  `<button class="theme-toggle" data-theme-toggle title="화면 밝기 바꾸기">${currentTheme() === "dark" ? "밝게" : "어둡게"}</button>`;
+// 계정 버튼(로그아웃·탈퇴)과 헷갈리지 않게, 글자 버튼이 아니라 해·달 모양 스위치로 만든다
+const SUN = `<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3.2"/><path d="M8 1.2v1.6M8 13.2v1.6M1.2 8h1.6M13.2 8h1.6M3.2 3.2l1.1 1.1M11.7 11.7l1.1 1.1M3.2 12.8l1.1-1.1M11.7 4.3l1.1-1.1"/></svg>`;
+const MOON = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.2 10.1A5.6 5.6 0 0 1 5.9 2.8a5.6 5.6 0 1 0 7.3 7.3z"/></svg>`;
+const themeToggle = () => {
+  const dark = currentTheme() === "dark";
+  return `<button class="theme-switch" data-theme-toggle role="switch" aria-checked="${dark}" aria-label="어두운 화면" title="${dark ? "밝은 화면으로" : "어두운 화면으로"}">
+    <span class="ts-icon ts-sun">${SUN}</span><span class="ts-icon ts-moon">${MOON}</span><span class="ts-knob"></span>
+  </button>`;
+};
 document.addEventListener("click", (e) => {
   if (!e.target.closest("[data-theme-toggle]")) return;
   const next = currentTheme() === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = next;
   try { localStorage.setItem("tf-theme", next); } catch { /* 기억 못 해도 괜찮음 */ }
-  document.querySelectorAll("[data-theme-toggle]").forEach((b) => (b.textContent = next === "dark" ? "밝게" : "어둡게"));
+  document.querySelectorAll("[data-theme-toggle]").forEach((b) => {
+    b.setAttribute("aria-checked", String(next === "dark"));
+    b.title = next === "dark" ? "밝은 화면으로" : "어두운 화면으로";
+  });
   const $map = document.getElementById("cmap");
   if ($map) drawMapLines($map);
 });
@@ -136,10 +186,16 @@ async function viewHome() {
   $app.innerHTML = `
     <div class="home">
       <div class="home-top">
-        <span class="who">${esc(state.user?.name || "")}</span>
-        <button class="btn btn-ghost btn-sm" id="logout">로그아웃</button>
-        <button class="btn btn-ghost btn-sm danger" id="delete-account">탈퇴</button>
-        ${themeToggle()}
+        <span class="wordmark">Before Blank</span>
+        <div class="top-right">
+          <div class="account">
+            <span class="who">${esc(state.user?.name || "")}</span>
+            <button class="btn btn-ghost btn-sm" id="logout">로그아웃</button>
+            <button class="btn btn-ghost btn-sm danger" id="delete-account">탈퇴</button>
+          </div>
+          <span class="top-sep" aria-hidden="true"></span>
+          ${themeToggle()}
+        </div>
       </div>
       <header class="home-hero">
         <div class="mascot">${mascot}</div>
@@ -214,20 +270,20 @@ async function loadTopicRows() {
     loadTopicRows();
   }));
   document.getElementById("folder-add").onclick = async () => {
-    const name = prompt("새 폴더 이름");
-    if (!name?.trim()) return;
+    const name = await ask({ title: "새 폴더", input: { placeholder: "폴더 이름 (예: 진로, 공부)", maxlength: 30 }, confirmText: "만들기" });
+    if (!name) return;
     try { const f = await api("/api/folders", { method: "POST", body: { name: name.trim() } }); state.folder = f.id; loadTopicRows(); }
     catch (err) { toast(err.message); }
   };
   if (cur) {
     document.getElementById("folder-rename").onclick = async () => {
-      const name = prompt("폴더 이름 바꾸기", cur.name);
-      if (!name?.trim() || name.trim() === cur.name) return;
+      const name = await ask({ title: "폴더 이름 바꾸기", input: { value: cur.name, maxlength: 30 }, confirmText: "바꾸기" });
+      if (!name || name === cur.name) return;
       try { await api(`/api/folders/${cur.id}`, { method: "PATCH", body: { name: name.trim() } }); loadTopicRows(); }
       catch (err) { toast(err.message); }
     };
     document.getElementById("folder-delete").onclick = async () => {
-      if (!confirm(`'${cur.name}' 폴더를 지울까요? 안에 있던 주제는 지우지 않고 '폴더 없음'으로 옮겨요.`)) return;
+      if (!(await ask({ title: `'${cur.name}' 폴더를 지울까요?`, message: "안에 있던 주제는 지우지 않고 '폴더 없음'으로 옮겨요.", confirmText: "폴더 지우기", danger: true }))) return;
       try { await api(`/api/folders/${cur.id}`, { method: "DELETE" }); state.folder = "all"; loadTopicRows(); }
       catch (err) { toast(err.message); }
     };
@@ -278,8 +334,8 @@ async function loadTopicRows() {
       let folderId = sel.value === "" ? null : sel.value;
       try {
         if (folderId === "__new") {
-          const name = prompt("새 폴더 이름");
-          if (!name?.trim()) { loadTopicRows(); return; }
+          const name = await ask({ title: "새 폴더", input: { placeholder: "폴더 이름", maxlength: 30 }, confirmText: "만들고 옮기기" });
+          if (!name) { loadTopicRows(); return; }
           folderId = (await api("/api/folders", { method: "POST", body: { name: name.trim() } })).id;
         }
         await api(`/api/topics/${sel.dataset.move}`, { method: "PATCH", body: { folder_id: folderId == null ? null : Number(folderId) } });
@@ -357,8 +413,9 @@ async function viewTopic(id, tab, opts = {}) {
           <div class="topic-actions">
             ${starBtn(topic.is_starred, topic.name)}
             <button class="status status-toggle" id="status-btn"></button>
-            ${themeToggle()}
             <button class="btn btn-ghost danger btn-sm" id="del-topic" title="주제 삭제">삭제</button>
+            <span class="top-sep" aria-hidden="true"></span>
+            ${themeToggle()}
           </div>
         </div>
         <nav class="tabs">
@@ -381,14 +438,14 @@ async function viewTopic(id, tab, opts = {}) {
   };
   // 이름 바꾸기
   document.getElementById("topic-title").onclick = async () => {
-    const name = prompt("주제 이름 바꾸기", topic.name);
-    if (!name || name.trim() === topic.name) return;
+    const name = await ask({ title: "주제 이름 바꾸기", input: { value: topic.name, maxlength: 40 }, confirmText: "바꾸기" });
+    if (!name || name === topic.name) return;
     try { await api(`/api/topics/${id}`, { method: "PATCH", body: { name: name.trim() } }); route(); }
     catch (err) { toast(err.message); }
   };
   // 삭제
   document.getElementById("del-topic").onclick = async () => {
-    if (!confirm(`'${topic.name}' 주제와 대화 ${turns.length}개, 생각 메모를 모두 삭제할까요? 되돌릴 수 없어요.`)) return;
+    if (!(await ask({ title: `'${topic.name}' 주제를 지울까요?`, message: `대화 ${turns.length}개와 생각 메모가 모두 지워지고 되돌릴 수 없어요.`, confirmText: "주제 지우기", danger: true }))) return;
     await api(`/api/topics/${id}`, { method: "DELETE" });
     location.hash = "#/";
   };
@@ -420,6 +477,7 @@ function turnHTML(t, n) {
         <button class="btn btn-ghost danger btn-sm" data-del-turn>삭제</button>
       </header>
       <h2 class="turn-q">${esc(t.question)}</h2>
+      ${t.attachments?.length ? `<div class="turn-files" aria-label="첨부 자료">${t.attachments.map(fileChip).join("")}</div>` : ""}
       <section class="block mine">
         <div class="block-label">내 생각 <small>AI 답을 보기 전에 적음</small></div>
         <div class="block-body">${esc(t.my_thought)}</div>
@@ -470,7 +528,7 @@ function bindTurn(t) {
   const $ask = $turn.querySelector("[data-ask]");
   if ($ask) $ask.onclick = () => streamAnswer(t);
   $turn.querySelector("[data-del-turn]").onclick = async () => {
-    if (!confirm("이 대화(질문·내 생각·AI 답·생각 메모)를 삭제할까요? 되돌릴 수 없어요.")) return;
+    if (!(await ask({ title: "이 대화를 지울까요?", message: "질문·내 생각·AI 답·생각 메모가 함께 지워지고 되돌릴 수 없어요.", confirmText: "지우기", danger: true }))) return;
     await api(`/api/turns/${t.id}`, { method: "DELETE" });
     route();
   };
@@ -556,6 +614,24 @@ async function streamAnswer(t) {
 }
 
 // 입력창: ① 질문 → ② 내 생각(20자 이상) → AI 답 보기
+// ---------- 첨부파일 ----------
+const FILE_TYPES = { ".txt": "텍스트", ".md": "텍스트", ".csv": "표", ".pdf": "PDF", ".png": "이미지", ".jpg": "이미지", ".jpeg": "이미지", ".webp": "이미지" };
+const MAX_FILES = 3, MAX_MB = 5;
+const extOf = (name) => (name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
+const fileKindLabel = (name) => FILE_TYPES[extOf(name)] || "파일";
+const fmtSize = (n) => n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`;
+const fileChip = (a) =>
+  `<a class="file-chip" href="/api/attachments/${a.id}" download title="${esc(a.filename)} 내려받기"><span class="fc-kind">${fileKindLabel(a.filename)}</span>${esc(a.filename)}<span class="fc-size">${fmtSize(a.size)}</span></a>`;
+
+async function uploadFiles(turnId, files) {
+  const fd = new FormData();
+  files.forEach((f) => fd.append("files", f));
+  const res = await fetch(`/api/turns/${turnId}/attachments`, { method: "POST", headers: { "X-BB-Upload": "1" }, body: fd });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "자료를 올리지 못했어요.");
+  return data;
+}
+
 // 입력창 위의 단계 표시: ① 질문 → ② 내 생각 → ③ AI 답
 const composerSteps = (cur) => `
   <ol class="c-steps" aria-label="진행 단계">
@@ -565,14 +641,22 @@ const composerSteps = (cur) => `
 
 function renderComposer(topic, turns) {
   const $c = document.getElementById("composer");
-  const draft = (state.drafts[topic.id] ||= { step: 1, question: "", thought: "" });
+  const draft = (state.drafts[topic.id] ||= { step: 1, question: "", thought: "", files: [] });
+  draft.files ||= [];
+  const pendingChips = () => draft.files.map((f, i) =>
+    `<span class="file-chip pending"><span class="fc-kind">${fileKindLabel(f.name)}</span>${esc(f.name)}<span class="fc-size">${fmtSize(f.size)}</span>${draft.step === 1 ? `<button type="button" class="fc-x" data-unfile="${i}" aria-label="${esc(f.name)} 빼기">×</button>` : ""}</span>`).join("");
 
   if (draft.step === 1) {
     $c.innerHTML = `
       <div class="composer-box">
         ${composerSteps(1)}
         <textarea id="c-question" rows="2" aria-label="질문" placeholder="${turns.length ? "이어서 물어볼 질문을 적어 주세요" : "첫 질문을 적어 주세요"}">${esc(draft.question)}</textarea>
+        <div class="c-files" id="c-files">${pendingChips()}</div>
         <div class="actions" style="margin-top:4px">
+          <label class="attach-btn" title="자료 첨부 (txt, md, csv, pdf, 이미지 · ${MAX_MB}MB, ${MAX_FILES}개까지)">
+            <input type="file" id="c-file" multiple accept=".txt,.md,.csv,.pdf,.png,.jpg,.jpeg,.webp" hidden>
+            <span>+ 자료 첨부</span>
+          </label>
           <span class="counter" id="c-qhint">${draft.question.trim() ? "Enter를 누르면 다음 단계로 가요" : "질문을 적으면 다음 단계로 넘어갈 수 있어요"}</span>
           <button class="btn btn-primary btn-sm" id="c-next" ${draft.question.trim() ? "" : "disabled"}>다음: 내 생각 적기 →</button>
         </div>
@@ -585,13 +669,29 @@ function renderComposer(topic, turns) {
     };
     $q.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing && $q.value.trim()) { e.preventDefault(); $next.click(); } };
     $next.onclick = () => { draft.step = 2; renderComposer(topic, turns); document.getElementById("c-thought").focus(); };
+    document.getElementById("c-file").onchange = (e) => {
+      for (const f of e.target.files) {
+        if (draft.files.length >= MAX_FILES) { toast(`자료는 ${MAX_FILES}개까지 붙일 수 있어요`); break; }
+        if (!FILE_TYPES[extOf(f.name)]) { toast(`'${f.name}'은(는) 붙일 수 없는 형식이에요`); continue; }
+        if (f.size > MAX_MB * 1024 * 1024) { toast(`'${f.name}'이(가) ${MAX_MB}MB보다 커요`); continue; }
+        draft.files.push(f);
+      }
+      e.target.value = "";
+      document.getElementById("c-files").innerHTML = pendingChips();
+    };
+    document.getElementById("c-files").onclick = (e) => {
+      const x = e.target.closest("[data-unfile]");
+      if (!x) return;
+      draft.files.splice(Number(x.dataset.unfile), 1);
+      document.getElementById("c-files").innerHTML = pendingChips();
+    };
     return;
   }
 
   $c.innerHTML = `
     <div class="composer-box">
       ${composerSteps(2)}
-      <div class="composer-q">${esc(draft.question)}</div>
+      <div class="composer-q">${esc(draft.question)}${draft.files.length ? `<div class="c-files">${pendingChips()}</div>` : ""}</div>
       <div class="composer-label">AI에게 보내기 전에, 내 생각을 먼저 적어 보세요 <small>(AI에게는 보내지 않아요)</small></div>
       ${promptButtons()}
       <textarea id="c-thought" class="thought" aria-label="내 생각" placeholder="내 생각은…">${esc(draft.thought)}</textarea>
@@ -616,11 +716,16 @@ function renderComposer(topic, turns) {
       const { id } = await api(`/api/topics/${topic.id}/turns`, {
         method: "POST", body: { question: draft.question.trim(), my_thought: draft.thought.trim() },
       });
+      let attachments = [];
+      if (draft.files.length) {
+        try { attachments = await uploadFiles(id, draft.files); }
+        catch (err) { toast(`${err.message} 자료 없이 AI 답을 받아요.`); }
+      }
       delete state.drafts[topic.id];
-      const t = { id, question: draft.question.trim(), my_thought: draft.thought.trim(), ai_answer: null, reflection: null, created_at: new Date().toISOString() };
+      const t = { id, question: draft.question.trim(), my_thought: draft.thought.trim(), ai_answer: null, reflection: null, created_at: new Date().toISOString(), attachments };
       turns.push(t);
       const $turns = document.getElementById("turns");
-      $turns.querySelector(".empty")?.remove();
+      $turns.querySelector(".empty, .chat-start")?.remove();
       $turns.insertAdjacentHTML("beforeend", turnHTML(t, turns.length));
       bindTurn(t);
       renderComposer(topic, turns);
@@ -666,11 +771,12 @@ async function renderMapTab($panel, topic, turns, refresh = false) {
       </div>
       <div id="map-notice"></div>
       <div id="map-ask"></div>
+      <div id="map-materials"></div>
       <div id="map-area"><div class="map-loading">대화 전체에서 내 생각과 AI 답의 핵심을 정리하는 중…</div></div>
     </div>`;
   const ctx = { topic, turns, data: null, editing: false, turnNo: Object.fromEntries(turns.map((t, i) => [t.id, i + 1])) };
-  document.getElementById("map-refresh").onclick = () => {
-    if (ctx.data?.edited && !confirm("다시 정리하면 AI가 처음부터 다시 만들어서, 직접 고친 내용은 사라져요. 계속할까요?")) return;
+  document.getElementById("map-refresh").onclick = async () => {
+    if (ctx.data?.edited && !(await ask({ title: "마인드맵을 다시 정리할까요?", message: "AI가 처음부터 다시 만들어서, 직접 고친 내용은 사라져요.", confirmText: "다시 정리" }))) return;
     renderMapTab($panel, topic, turns, true);
   };
 
@@ -725,6 +831,32 @@ function paintMap(ctx) {
     ${data.stale ? `<div class="map-note warn">대화가 새로 늘었어요. <b>다시 정리</b>하면 새 대화가 반영되지만, 직접 고친 내용은 사라져요.</div>` : ""}`;
 
   // AI가 애매하다고 한 요점: 사용자에게 묻기
+  // 첨부 자료 정리: 자료마다 요약, 핵심, 내 생각과의 연결
+  const files = Object.fromEntries(turns.flatMap((t) => (t.attachments || []).map((a) => [a.id, a])));
+  const materials = (data.materials || []).filter((m) => files[m.attachment_id]);
+  const $mat = document.getElementById("map-materials");
+  $mat.innerHTML = materials.length ? `
+    <section class="map-materials" aria-label="첨부 자료 정리">
+      <h3>첨부 자료 <small>${materials.length}개 · AI가 자료를 읽고 정리했어요</small></h3>
+      <div class="mat-grid">
+        ${materials.map((m) => `
+          <article class="mat">
+            <header>
+              <span class="fc-kind">${fileKindLabel(files[m.attachment_id].filename)}</span>
+              <span class="mat-name">${esc(files[m.attachment_id].filename)}</span>
+              ${(m.turn_ids || []).map((tid) => `<button class="turn-chip" data-jump="${tid}">대화 ${turnNo[tid] ?? "?"}</button>`).join("")}
+            </header>
+            <p class="mat-sum">${esc(m.summary)}</p>
+            ${m.key_points?.length ? `<ul class="mat-points">${m.key_points.map((k) => `<li>${esc(k)}</li>`).join("")}</ul>` : ""}
+            ${m.relation ? `<p class="mat-rel"><b>내 생각과의 연결</b> ${esc(m.relation)}</p>` : ""}
+          </article>`).join("")}
+      </div>
+    </section>` : "";
+  $mat.onclick = (e) => {
+    const j = e.target.closest("[data-jump]");
+    if (j) location.hash = `#/topic/${topic.id}?turn=${j.dataset.jump}`;
+  };
+
   const $ask = document.getElementById("map-ask");
   $ask.innerHTML = uncertain.length ? `
     <section class="map-ask" aria-label="확인이 필요한 요점">
@@ -945,7 +1077,7 @@ function openNodeEditor(ctx, $anchor, side, index) {
   form.querySelector('[data-ed="cancel"]').onclick = () => { form.remove(); $anchor.classList.remove("editing-hidden"); ctx.apply?.(); };
   const del = form.querySelector('[data-ed="delete"]');
   if (del) del.onclick = async () => {
-    if (!confirm(`'${p.label}' 요점을 지울까요?`)) return;
+    if (!(await ask({ title: `'${p.label}' 요점을 지울까요?`, confirmText: "지우기", danger: true }))) return;
     const next = cloneMap(ctx.data);
     next[MM_KEYS[side]].splice(index, 1);
     if (await saveMap(ctx, next)) toast("요점을 지웠어요");
@@ -1025,7 +1157,7 @@ function brandPanel() {
   const mascot = document.getElementById("mascot-template").innerHTML;
   return `
     <section class="brand">
-      <div class="brand-mark"><span class="mascot sm">${mascot}</span><span>생각 먼저</span></div>
+      <div class="brand-mark"><span class="mascot sm">${mascot}</span><span class="brand-name"><b>비포블랭크</b> Before Blank</span></div>
       <h1 class="brand-title">AI에게 묻기 전에,<br>내 생각부터.</h1>
 
       <div class="brand-block">
@@ -1087,6 +1219,7 @@ function viewLogin() {
       <p class="form-err" id="form-err" role="alert"></p>
       <button class="btn btn-primary btn-block" type="submit">로그인</button>
     </form>
+    <p class="auth-forgot"><a href="#/forgot">비밀번호를 잊었나요?</a></p>
     <p class="auth-switch">아직 계정이 없나요? <a href="#/signup">회원가입</a></p>`);
   const $f = document.getElementById("login-form");
   $f.onsubmit = async (e) => {
@@ -1183,6 +1316,81 @@ function viewSignup() {
   document.getElementById("name").focus();
 }
 
+// 비밀번호 찾기: 이메일을 받으면 재설정 링크를 보낸다
+function viewForgot() {
+  authShell(`
+    <h2 class="auth-title">비밀번호 찾기</h2>
+    <p class="auth-sub">가입한 이메일을 적으면, 새 비밀번호를 정할 수 있는 링크를 보내 드려요. 링크는 30분 동안만 열려요.</p>
+    <form id="forgot-form" novalidate>
+      ${field("email", "이메일", `<input type="text" id="email" inputmode="email" autocomplete="email" required>`)}
+      <p class="form-err" id="form-err" role="alert"></p>
+      <div class="form-ok" id="form-ok" role="status"></div>
+      <button class="btn btn-primary btn-block" type="submit">재설정 링크 받기</button>
+    </form>
+    <p class="auth-switch"><a href="#/login">로그인으로 돌아가기</a></p>`);
+  const $f = document.getElementById("forgot-form");
+  $f.onsubmit = async (e) => {
+    e.preventDefault();
+    const $btn = $f.querySelector("button[type=submit]");
+    document.getElementById("form-err").textContent = "";
+    if (!$f.email.value.trim()) { document.getElementById("form-err").textContent = "이메일을 입력해 주세요."; return; }
+    $btn.disabled = true;
+    try {
+      const r = await api("/api/password/forgot", { method: "POST", body: { email: $f.email.value } });
+      document.getElementById("form-ok").innerHTML = esc(r.message) +
+        (r.dev_link ? `<br><span class="dev-note">메일 서버가 설정되지 않은 로컬 체험 환경이라, 여기서 바로 열 수 있어요: <a href="${esc(r.dev_link)}">재설정 화면 열기</a></span>` : "");
+      $btn.textContent = "다시 보내기";
+    } catch (err) {
+      document.getElementById("form-err").textContent = err.message;
+    } finally {
+      $btn.disabled = false;
+    }
+  };
+  document.getElementById("email").focus();
+}
+
+// 메일의 링크로 들어오면 새 비밀번호를 정한다
+function viewReset(token) {
+  authShell(`
+    <h2 class="auth-title">새 비밀번호 정하기</h2>
+    <p class="auth-sub">새 비밀번호를 정하면 다시 로그인할 수 있어요.</p>
+    <form id="reset-form" novalidate>
+      ${field("password", "새 비밀번호", `<input type="password" id="password" autocomplete="new-password" required>`, "영문과 숫자를 섞어 8자 이상")}
+      ${field("password_confirm", "새 비밀번호 확인", `<input type="password" id="password_confirm" autocomplete="new-password" required>`)}
+      <p class="form-err" id="form-err" role="alert"></p>
+      <button class="btn btn-primary btn-block" type="submit">비밀번호 바꾸기</button>
+    </form>
+    <p class="auth-switch"><a href="#/forgot">링크를 다시 받기</a></p>`);
+  const $f = document.getElementById("reset-form");
+  $f.onsubmit = async (e) => {
+    e.preventDefault();
+    const $btn = $f.querySelector("button[type=submit]");
+    $btn.disabled = true;
+    document.getElementById("form-err").textContent = "";
+    showFieldErrors({});
+    try {
+      const res = await fetch("/api/password/reset", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, password: $f.password.value, password_confirm: $f.password_confirm.value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showFieldErrors(data.fields || {});
+        document.getElementById("form-err").textContent = data.error || "바꾸지 못했어요.";
+        $btn.disabled = false;
+        return;
+      }
+      state.user = null;
+      toast("비밀번호를 바꿨어요. 새 비밀번호로 로그인해 주세요.");
+      location.hash = "#/login";
+    } catch {
+      document.getElementById("form-err").textContent = "서버에 연결하지 못했어요.";
+      $btn.disabled = false;
+    }
+  };
+  document.getElementById("password").focus();
+}
+
 async function logout() {
   await api("/api/logout", { method: "POST" }).catch(() => {});
   state.user = null;
@@ -1191,8 +1399,10 @@ async function logout() {
 }
 
 async function deleteAccount() {
-  if (!confirm("탈퇴하면 계정과 모든 주제·대화·생각 메모가 바로 지워지고 되돌릴 수 없어요. 계속할까요?")) return;
-  const password = prompt("확인을 위해 비밀번호를 입력해 주세요.");
+  const password = await ask({
+    title: "정말 탈퇴할까요?", message: "계정과 모든 주제·대화·생각 메모가 바로 지워지고 되돌릴 수 없어요. 확인을 위해 비밀번호를 입력해 주세요.",
+    input: { type: "password", maxlength: 200 }, confirmText: "탈퇴하기", danger: true,
+  });
   if (!password) return;
   try {
     await api("/api/me", { method: "DELETE", body: { password } });
@@ -1211,12 +1421,14 @@ async function route() {
   if (state.user === undefined) {
     state.user = (await api("/api/me").catch(() => ({ user: null }))).user;
   }
-  const authPage = path === "/login" || path === "/signup";
+  const authPage = ["/login", "/signup", "/forgot", "/reset"].includes(path);
   if (!state.user && !authPage) { location.replace("#/login"); return; }
-  if (state.user && authPage) { location.replace("#/"); return; }
+  if (state.user && (path === "/login" || path === "/signup")) { location.replace("#/"); return; }
   window.scrollTo(0, 0);
   if (path === "/login") return viewLogin();
   if (path === "/signup") return viewSignup();
+  if (path === "/forgot") return viewForgot();
+  if (path === "/reset") return viewReset(qs.get("token") || "");
   let m;
   if (path === "/new") await viewNewTopic();
   else if ((m = path.match(/^\/topic\/(\d+)\/map$/))) { window.scrollTo(0, 0); await viewTopic(Number(m[1]), "map"); }
