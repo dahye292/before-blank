@@ -269,13 +269,13 @@ function renderResume(all) {
   let html;
   if (!last) {
     html = `<p class="resume-text">아직 주제가 없어요. 궁금한 게 생기면, AI에게 묻기 전에 내 생각부터 적어 볼까요?</p>
-            <a class="btn btn-primary btn-sm" href="#/new">첫 주제 만들기</a>`;
+            <a class="btn btn-brand-line" href="#/new">첫 주제 만들기 →</a>`;
   } else if (!last.last_question) {
     html = `<p class="resume-text">${ago(last.updated_at)} <a href="#/topic/${last.id}">${esc(last.name)}</a>을(를) 만들고 첫 질문 전에 멈췄어요. 이어서 시작해 볼까요?</p>
-            <a class="btn btn-primary btn-sm" href="#/topic/${last.id}">이어서 생각하기</a>`;
+            <a class="btn btn-brand-line" href="#/topic/${last.id}">이어서 생각하기 →</a>`;
   } else {
     html = `<p class="resume-text">${ago(last.updated_at)} <a href="#/topic/${last.id}">${esc(last.name)}</a>에서 <q>${esc(clip(last.last_question, 46))}</q>를 고민하다 멈췄어요. 이어서 생각해 볼까요?</p>
-            <a class="btn btn-primary btn-sm" href="#/topic/${last.id}">이어서 생각하기</a>`;
+            <a class="btn btn-brand-line" href="#/topic/${last.id}">이어서 생각하기 →</a>`;
   }
   $r.innerHTML = mascot + `<div class="resume-body">${html}</div>`;
 }
