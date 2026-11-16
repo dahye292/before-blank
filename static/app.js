@@ -91,6 +91,11 @@ function ask({ title, message = "", input = null, confirmText = "확인", cancel
   });
 }
 
+// 비포블랭크 아이콘: 빈칸(점선 상자) 앞에 먼저 놓인 내 생각(호박색 점). 테마에 맞게 색이 바뀐다
+const LOGO = `<svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+  <rect x="13" y="8.5" width="12.5" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.4"/>
+  <circle cx="8" cy="16" r="3.3" fill="var(--mine)"/></svg>`;
+
 const statusBadge = (s) =>
   s === "done" ? `<span class="status done"><i></i>완료</span>` : `<span class="status in_progress"><i></i>진행중</span>`;
 
@@ -186,7 +191,7 @@ async function viewHome() {
   $app.innerHTML = `
     <div class="home">
       <div class="home-top">
-        <span class="wordmark">Before Blank</span>
+        <span class="wordmark">${LOGO}<span><b>비포블랭크</b> Before Blank</span>${cfg.demo ? `<span class="demo-pill">데모 모드</span>` : ""}</span>
         <div class="top-right">
           <div class="account">
             <span class="who">${esc(state.user?.name || "")}</span>
@@ -200,7 +205,6 @@ async function viewHome() {
       <header class="home-hero">
         <div class="mascot">${mascot}</div>
         <h1>주제</h1>
-        <p>묻기 전에, 내 생각부터 ${cfg.demo ? `<span class="demo-pill">데모 모드</span>` : ""}</p>
       </header>
       <div class="toolbar">
         <input type="search" id="search" placeholder="주제·질문·생각·답 검색" value="${esc(state.q)}">
@@ -1157,7 +1161,7 @@ function brandPanel() {
   const mascot = document.getElementById("mascot-template").innerHTML;
   return `
     <section class="brand">
-      <div class="brand-mark"><span class="mascot sm">${mascot}</span><span class="brand-name"><b>비포블랭크</b> Before Blank</span></div>
+      <div class="brand-mark">${LOGO}<span class="brand-name"><b>비포블랭크</b> Before Blank</span></div>
       <h1 class="brand-title">AI에게 묻기 전에,<br>내 생각부터.</h1>
 
       <div class="brand-block">

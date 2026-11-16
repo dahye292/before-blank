@@ -632,12 +632,12 @@ button.turn-chip { background: none; font: inherit; font-size: 11px; }
 
 /* 어두운 화면에서 마스코트가 바탕에 묻히지 않게: 형광 대신 아주 은은한 따뜻한 빛과 얇은 밝은 테두리 */
 :root[data-theme="dark"] .mascot img, :root:not([data-theme]) .mascot img {
-  filter: drop-shadow(0 0 1px rgba(255, 240, 222, .55)) drop-shadow(0 0 16px rgba(255, 196, 140, .16));
+  filter: drop-shadow(0 0 1.5px rgba(255, 244, 230, .9)) drop-shadow(0 0 8px rgba(255, 220, 180, .45)) drop-shadow(0 0 16px rgba(255, 190, 130, .30));
 }
 :root[data-theme="dark"] .mascot, :root:not([data-theme]) .mascot { position: relative; }
 :root[data-theme="dark"] .mascot::before, :root:not([data-theme]) .mascot::before {
   content: ""; position: absolute; inset: 8% 4% 0; border-radius: 50%;
-  background: radial-gradient(closest-side, rgba(226, 180, 92, .10), transparent); z-index: -1;
+  display: none;
 }
 .mascot { isolation: isolate; }
 @media (max-width: 760px) {
@@ -685,3 +685,10 @@ a.file-chip:hover { border-color: var(--quiet); color: var(--text); }
 .mat-points { margin: 0 0 6px; padding-left: 16px; font-size: 12.5px; color: var(--muted); }
 .mat-rel { margin: 0; font-size: 12.5px; color: var(--muted); }
 .mat-rel b { color: var(--mine); font-weight: 600; margin-right: 4px; }
+
+/* ---------- 비포블랭크 아이콘 ---------- */
+.logo { width: 24px; height: 24px; flex: none; color: var(--text-2); }
+.wordmark { display: inline-flex; align-items: center; gap: 8px; font-weight: 400; color: var(--muted); }
+.wordmark b { color: var(--text); font-weight: 650; margin-right: 4px; }
+.brand-mark .logo { width: 28px; height: 28px; }
+.home-hero { margin-top: 4px; }
