@@ -1257,3 +1257,99 @@ input[type=text], input[type=search], textarea { font-size: var(--fs-body); padd
   .q-col.shared::before { color: var(--shared); }
   .q-col.ai::before { color: var(--ai); }
 }
+
+
+/* ============================================================
+   마인드맵 v4: 가지로 잇는 마인드맵 (카드 없음)
+   질문 = 가운데 마디 / 내 생각 = 왼쪽 가지 / AI 생각 = 오른쪽 가지 / 겹치는 생각 = 아래 가지
+   요점은 가지 끝에 얹힌 글자(밑줄 = 가지 끝). 색은 가지 구분에만, 그림자·배경 없음.
+   ============================================================ */
+.mm { position: relative; padding: var(--sp-2) 0 var(--sp-4); }
+.mm-lines { position: absolute; inset: 0; pointer-events: none; overflow: visible; z-index: 0; }
+.mm-lines path { fill: none; stroke-width: 1.5; stroke-linecap: round; opacity: .7; transition: opacity .12s, stroke-width .12s; }
+.mm-lines .l-mine { stroke: var(--mine); }
+.mm-lines .l-ai { stroke: var(--ai); }
+.mm-lines .l-shared { stroke: var(--shared); }
+.mm-lines .similar { stroke-dasharray: 4 4; }
+.mm-lines path.hl { opacity: 1; stroke-width: 2.25; }
+
+.mm-head, .mm-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, 300px) minmax(0, 1fr); column-gap: 72px; position: relative; z-index: 1; }
+.mm-head { margin-bottom: var(--sp-3); font-size: var(--fs-xs); font-weight: 600; color: var(--quiet); }
+.mm-head .mine { text-align: right; color: var(--mine); }
+.mm-head .ai { color: var(--ai); }
+.mm-row { align-items: center; padding: var(--sp-4) 0; border-top: 1px solid var(--hairline); }
+.mm-row:first-of-type { border-top: none; }
+.mm-row[hidden] { display: none; }
+
+.mm-col { display: grid; gap: var(--sp-2); align-content: center; min-width: 0; }
+.mm-col.mine { justify-items: end; text-align: right; }
+.mm-col.ai { justify-items: start; text-align: left; }
+.mm-center { display: grid; justify-items: center; gap: var(--sp-5); min-width: 0; }
+
+/* 질문 마디: 이 지도의 중심. 명조, 얇은 테두리 */
+.mm-q {
+  display: block; width: 100%; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-card); cursor: pointer; text-align: center;
+  border: 1px solid var(--hairline-strong); background: var(--bg); color: var(--text);
+  font-family: var(--serif); font-size: var(--fs-body); font-weight: 700; line-height: 24px;
+}
+.mm-q:hover { border-color: var(--text-2); }
+.mm-q.manual { cursor: default; color: var(--muted); font-weight: 500; }
+.mm-qno { display: block; font-family: var(--font); font-size: var(--fs-xs); font-weight: 500; color: var(--quiet); line-height: 18px; }
+
+/* 요점: 글자 + 가지 색 밑줄 */
+.mm-node {
+  display: grid; gap: 2px; max-width: 100%; padding: 2px 2px 4px; border: none; border-bottom: 1.5px solid var(--quiet);
+  background: none; color: var(--text); font: inherit; text-align: inherit; cursor: pointer; border-radius: 0;
+}
+.mm-node.mine { border-bottom-color: var(--mine); }
+.mm-node.ai { border-bottom-color: var(--ai); }
+.mm-label { font-size: var(--fs-ui); font-weight: 600; line-height: 20px; }
+.mm-detail { display: none; font-size: var(--fs-sm); color: var(--muted); line-height: 18px; max-width: 280px; }
+.mm.show-detail .mm-detail { display: block; }
+.mm-node:hover .mm-label { color: var(--brand); }
+
+/* 겹치는 생각: 질문 아래, 둘이 만나는 자리라 테두리로 감싼다 (같은 생각 실선 / 비슷한 생각 점선) */
+.mm-shared { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--sp-2); }
+.mm-shared:empty { display: none; }
+.mm-node.shared { border: 1.5px solid var(--shared); border-radius: 999px; padding: 4px var(--sp-2); text-align: center; background: var(--bg); }
+.mm-node.shared.similar { border-style: dashed; }
+.mm-node.shared .mm-detail { max-width: 220px; }
+
+/* 툴팁은 줄바꿈을 살린다 */
+.mm [data-tip]:hover::after, .mm [data-tip]:focus-visible::after { white-space: pre-line; }
+.mm-col.mine [data-tip]:hover::after, .mm-col.mine [data-tip]:focus-visible::after { left: auto; right: 0; }
+.mm-shared [data-tip]:hover::after, .mm-center > [data-tip]:hover::after { left: 50%; transform: translateX(-50%); }
+
+/* 고치기 */
+.mm-add { height: var(--h-small); padding: 0 var(--sp-1); border: 1px dashed var(--hairline-strong); border-radius: var(--r-control); background: var(--bg); color: var(--quiet); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
+.mm-add:hover { color: var(--brand); border-color: var(--brand); }
+.mm.editing .mm-node { cursor: text; }
+.mm-node.editing-hidden { display: none; }
+.mm .node-editor { width: min(320px, 100%); text-align: left; background: var(--surface); }
+
+/* 좁은 화면: 질문에서 아래로 내려가는 줄기에서 갈라지는 나무 */
+@media (max-width: 760px) {
+  .mm-head { display: none; }
+  .mm-row { grid-template-columns: 1fr; row-gap: var(--sp-2); padding: var(--sp-3) 0; align-items: start; }
+  .mm-center { order: -1; justify-items: stretch; gap: var(--sp-2); }
+  .mm-q { text-align: left; }
+  .mm-col, .mm-shared { padding-left: 28px; justify-items: start; justify-content: flex-start; text-align: left; }
+  .mm-col.mine { justify-items: start; text-align: left; }
+  .mm-shared { display: grid; justify-items: start; }
+  .mm-col::before, .mm-shared::before { content: attr(data-col); font-size: var(--fs-xs); font-weight: 600; color: var(--quiet); }
+  .mm-col.mine::before { color: var(--mine); }
+  .mm-col.ai::before { color: var(--ai); }
+  .mm-shared::before { color: var(--shared); }
+  .mm-col:empty, .mm-shared:empty { display: none; }
+  .mm-node.shared { text-align: left; }
+  .mm-col.mine [data-tip]:hover::after { left: 0; right: auto; }
+}
+/* 왼쪽 요점의 툴팁은 화면 밖으로 나가지 않게 안쪽(오른쪽)으로 펼친다 */
+.mm-col.mine [data-tip]:hover::after, .mm-col.mine [data-tip]:focus-visible::after { left: 0; right: auto; }
+.mm-col.ai [data-tip]:hover::after, .mm-col.ai [data-tip]:focus-visible::after { left: auto; right: 0; }
+/* 좁은 PC 폭에서도 가로로 넘치지 않게: 가운데 칸·가지 간격을 조금 줄이고, 고치는 칸은 칸 너비에 맞춘다 */
+.mm-head, .mm-row { grid-template-columns: minmax(0, 1fr) minmax(180px, 280px) minmax(0, 1fr); column-gap: 56px; }
+.mm .node-editor { width: 100%; max-width: 320px; min-width: 0; }
+.mm .node-editor input, .mm .node-editor textarea, .mm .node-editor select { min-width: 0; max-width: 100%; }
+.mm .node-editor .ed-row { flex-wrap: wrap; }
+@media (max-width: 760px) { .mm-head, .mm-row { grid-template-columns: 1fr; } }

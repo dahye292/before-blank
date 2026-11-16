@@ -1104,7 +1104,7 @@ async function renderMapTab($panel, topic, turns, refresh = false) {
         <div class="legend" aria-label="범례">
           <span class="lg"><i class="lg-box"></i>같은 생각</span>
           <span class="lg"><i class="lg-box similar"></i>비슷한 생각</span>
-          ${tip("질문마다 내 생각과 AI 답의 핵심을 나눠 정리했어요. 가운데는 둘이 겹치는 생각이에요. AI가 정리한 결과라 틀릴 수 있으니, 다르면 '직접 고치기'로 바로잡아 주세요. 요점을 누르면 그 대화로 이동해요.", "마인드맵 안내")}
+          ${tip("가운데가 질문이고, 왼쪽 가지는 내 생각, 오른쪽 가지는 AI 생각, 아래로 내려온 가지는 둘이 겹치는 생각이에요. AI가 정리한 결과라 틀릴 수 있으니, 다르면 '직접 고치기'로 바로잡아 주세요. 요점에 마우스를 올리면 설명이 보이고, 누르면 그 대화로 이동해요.", "마인드맵 안내")}
           <span id="map-badges"></span>
         </div>
         <div class="map-tools">
@@ -1113,7 +1113,7 @@ async function renderMapTab($panel, topic, turns, refresh = false) {
           <div class="more">
             <button class="btn btn-sm btn-ghost more-btn" id="map-more" aria-haspopup="menu" aria-expanded="false" aria-label="더보기" title="더보기">⋯</button>
             <div class="more-menu" id="map-more-menu" role="menu" hidden>
-              <button role="menuitem" id="mv-compact" hidden>설명 숨기기</button>
+              <button role="menuitem" id="mv-compact" hidden>설명 보이기</button>
               <button role="menuitem" id="map-refresh">AI로 다시 정리</button>
             </div>
           </div>
@@ -1283,51 +1283,53 @@ function paintMap(ctx) {
     if (ctx.editing) return "눌러서 고치기";
     const kind = side === "shared" ? (p.kind === "similar" ? "비슷한 생각" : "같은 생각") : "";
     const more = p.turn_ids.length > 1 ? `대화 ${p.turn_ids.map((t) => turnNo[t] ?? "?").join(", ")}에서 나옴` : "";
-    const go = p.turn_ids.length ? "누르면 그 대화로 이동" : "직접 추가한 요점";
-    return [kind, more, go].filter(Boolean).join(" · ");
+    return [p.detail, [kind, more].filter(Boolean).join(" · ")].filter(Boolean).join("\n");
   };
+  // 요점 = 가지 끝에 얹힌 글자 (카드 아님). 설명은 툴팁, ⋯에서 '설명 보이기'를 고르면 아래에 작게
   const point = (side, { p, i }) => `
-    <button class="pt ${side} ${p.kind || ""}" data-side="${side}" data-i="${i}" ${p.turn_ids.length ? `data-turn="${p.turn_ids[0]}"` : ""} title="${esc(ptTip(side, p))}">
-      <span class="pt-label">${esc(p.label)}</span>
-      ${p.detail ? `<span class="pt-detail">${esc(p.detail)}</span>` : ""}
+    <button class="mm-node ${side} ${p.kind || ""}" data-side="${side}" data-i="${i}" ${p.turn_ids.length ? `data-turn="${p.turn_ids[0]}"` : ""} ${ptTip(side, p) ? `data-tip="${esc(ptTip(side, p))}"` : ""}>
+      <span class="mm-label">${esc(p.label)}</span>
+      ${p.detail ? `<span class="mm-detail">${esc(p.detail)}</span>` : ""}
     </button>`;
-  const col = (side, g) => `
-    <div class="q-col ${side}" data-col="${AREAS[side]}">
-      ${g[side].map((x) => point(side, x)).join("")}
-      ${ctx.editing ? `<button class="pt-add" data-add="${side}" data-turns="${g.turn ? g.turn.id : ""}">+ 추가</button>` : g[side].length ? "" : `<span class="q-empty" aria-label="없음"></span>`}
-    </div>`;
+  const add = (side, g) => ctx.editing ? `<button class="mm-add" data-add="${side}" data-turns="${g.turn ? g.turn.id : ""}">+ 추가</button>` : "";
 
   document.getElementById("map-area").innerHTML = `
-    <div class="qmap ${ctx.editing ? "editing" : ""}" id="cmap">
-      <div class="qmap-head" aria-hidden="true">
-        <span class="mine">${AREAS.mine}</span><span class="shared">${AREAS.shared}</span><span class="ai">${AREAS.ai}</span>
-      </div>
+    <div class="mm ${ctx.editing ? "editing" : ""}" id="cmap">
+      <svg class="mm-lines" aria-hidden="true"></svg>
+      <div class="mm-head" aria-hidden="true"><span class="mine">${AREAS.mine}</span><span></span><span class="ai">${AREAS.ai}</span></div>
       ${rows.map((g) => `
-        <section class="q-row" data-row="${g.turn ? g.turn.id : "manual"}">
-          ${g.turn
-            ? `<button class="q-title" data-turn="${g.turn.id}" title="누르면 이 대화로 이동"><span class="q-no">${turnNo[g.turn.id]}</span><span class="q-text">${esc(g.turn.question)}</span></button>`
-            : `<div class="q-title manual"><span class="q-text">직접 추가한 요점</span></div>`}
-          <div class="q-cols">${col("mine", g)}${col("shared", g)}${col("ai", g)}</div>
+        <section class="mm-row" data-row="${g.turn ? g.turn.id : "manual"}">
+          <div class="mm-col mine" data-col="${AREAS.mine}">${g.mine.map((x) => point("mine", x)).join("")}${add("mine", g)}</div>
+          <div class="mm-center">
+            ${g.turn
+              ? `<button class="mm-q" data-turn="${g.turn.id}" data-tip="누르면 이 대화로 이동"><span class="mm-qno">${turnNo[g.turn.id]}</span>${esc(g.turn.question)}</button>`
+              : `<div class="mm-q manual">직접 추가한 요점</div>`}
+            <div class="mm-shared" data-col="${AREAS.shared}">${g.shared.map((x) => point("shared", x)).join("")}${add("shared", g)}</div>
+          </div>
+          <div class="mm-col ai" data-col="${AREAS.ai}">${g.ai.map((x) => point("ai", x)).join("")}${add("ai", g)}</div>
         </section>`).join("")}
     </div>`;
 
   const $map = document.getElementById("cmap");
+  const redraw = () => drawMindLines($map);
+  ctx.redraw = redraw;
   const apply = () => {
     const sel = view.turns ? String(view.turns[0]) : null;
-    $map.querySelectorAll(".q-row").forEach((r) => { r.hidden = !!sel && r.dataset.row !== sel; });
+    $map.querySelectorAll(".mm-row").forEach((r) => { r.hidden = !!sel && r.dataset.row !== sel; });
     const $turnSel = document.getElementById("map-turn");
     if ($turnSel) $turnSel.value = sel || "all";
-    $map.classList.toggle("compact", view.compact && !ctx.editing);
-    const $compact = document.getElementById("mv-compact");
-    $compact.hidden = false;
-    $compact.textContent = view.compact ? "설명 보이기" : "설명 숨기기";
+    $map.classList.toggle("show-detail", !!view.showDetail || ctx.editing);
+    const $detail = document.getElementById("mv-compact");
+    $detail.hidden = false;
+    $detail.textContent = view.showDetail ? "설명 숨기기" : "설명 보이기";
     saveMapView(topic.id, view);
+    redraw();
   };
   ctx.apply = apply;
   const $turnSel = document.getElementById("map-turn");
   if ($turnSel) $turnSel.onchange = () => { view.turns = $turnSel.value === "all" ? null : [Number($turnSel.value)]; apply(); };
   document.getElementById("mv-compact").onclick = () => {
-    view.compact = !view.compact;
+    view.showDetail = !view.showDetail;
     document.getElementById("map-more-menu").hidden = true;
     apply();
   };
@@ -1336,16 +1338,66 @@ function paintMap(ctx) {
     if (e.target.closest(".node-editor")) return;
     if (ctx.editing) {
       // 고치기 모드: 요점을 누르면 편집, '+ 추가'로 그 질문에 새 요점
-      const add = e.target.closest("[data-add]");
-      if (add) { openNodeEditor(ctx, add, add.dataset.add, -1, add.dataset.turns ? [Number(add.dataset.turns)] : []); return; }
-      const n = e.target.closest(".pt");
+      const addBtn = e.target.closest("[data-add]");
+      if (addBtn) { openNodeEditor(ctx, addBtn, addBtn.dataset.add, -1, addBtn.dataset.turns ? [Number(addBtn.dataset.turns)] : []); return; }
+      const n = e.target.closest(".mm-node");
       if (n) openNodeEditor(ctx, n, n.dataset.side, Number(n.dataset.i));
       return;
     }
     const target = e.target.closest("[data-turn]");
     if (target) jump(target.dataset.turn);
   });
+  // 요점에 마우스를 올리면 그 가지만 진하게
+  $map.addEventListener("mouseover", (e) => {
+    const n = e.target.closest(".mm-node");
+    $map.querySelectorAll(".mm-lines path.hl").forEach((x) => x.classList.remove("hl"));
+    if (n) $map.querySelector(`.mm-lines path[data-for="${n.dataset.side}-${n.dataset.i}"]`)?.classList.add("hl");
+  });
   apply();
+  if (resizeObs) resizeObs.disconnect();
+  resizeObs = new ResizeObserver(redraw);
+  resizeObs.observe($map);
+}
+
+// 가지 그리기: 질문 마디에서 왼쪽(내 생각)·오른쪽(AI 생각)·아래(겹치는 생각)로 곡선.
+// 왼쪽·오른쪽 요점은 글자 밑줄 끝에 가지가 닿아, 글자가 가지 위에 얹힌 모양이 된다.
+// 좁은 화면에서는 질문 아래로 내려가는 줄기에서 갈라지는 나무 모양.
+function drawMindLines($map) {
+  const svg = $map?.querySelector(".mm-lines");
+  if (!svg) return;
+  const base = $map.getBoundingClientRect();
+  const B = (el) => {
+    const r = el.getBoundingClientRect();
+    return { l: r.left - base.left, r: r.right - base.left, t: r.top - base.top, b: r.bottom - base.top,
+             cx: r.left - base.left + r.width / 2, cy: r.top - base.top + r.height / 2 };
+  };
+  svg.setAttribute("width", base.width);
+  svg.setAttribute("height", base.height);
+  const narrow = window.matchMedia("(max-width: 760px)").matches;
+  let d = "";
+  $map.querySelectorAll(".mm-row:not([hidden])").forEach((row) => {
+    const q = B(row.querySelector(".mm-q"));
+    row.querySelectorAll(".mm-node:not(.editing-hidden)").forEach((n) => {
+      const b = B(n), side = n.dataset.side, key = `${side}-${n.dataset.i}`;
+      const cls = `l-${side}${n.classList.contains("similar") ? " similar" : ""}`;
+      let path;
+      if (narrow) {
+        const x = q.l + 12, y = side === "shared" ? b.cy : b.b, r = 8;
+        path = `M${x},${q.b} L${x},${y - r} Q${x},${y} ${x + r},${y} L${b.l},${y}`;
+      } else if (side === "mine") {
+        const k = Math.max(24, (q.l - b.r) / 2);
+        path = `M${q.l},${q.cy} C${q.l - k},${q.cy} ${b.r + k},${b.b} ${b.r},${b.b}`;
+      } else if (side === "ai") {
+        const k = Math.max(24, (b.l - q.r) / 2);
+        path = `M${q.r},${q.cy} C${q.r + k},${q.cy} ${b.l - k},${b.b} ${b.l},${b.b}`;
+      } else {
+        const m = (q.b + b.t) / 2;
+        path = `M${q.cx},${q.b} C${q.cx},${m} ${b.cx},${m} ${b.cx},${b.t}`;
+      }
+      d += `<path class="${cls}" data-for="${key}" d="${path}"/>`;
+    });
+  });
+  svg.innerHTML = d;
 }
 
 // 요점 하나를 고치는 칸: 이름·설명·영역(내 생각만/겹치는 생각/AI만)·같음/비슷함, 삭제
@@ -1407,11 +1459,12 @@ function openNodeEditor(ctx, $anchor, side, index, turnIds = []) {
     if (await saveMap(ctx, next)) toast(isNew ? "요점을 추가했어요" : "고쳤어요");
   };
   form.label.focus();
+  ctx.redraw?.();
 }
 
 // 마인드맵 보기 설정은 주제마다 이 브라우저에 기억해 둔다 (없거나 못 읽어도 기본값으로 동작)
 function loadMapView(topicId) {
-  const base = { hidden: [], turns: null, compact: false };
+  const base = { hidden: [], turns: null, showDetail: false };
   try {
     const saved = JSON.parse(localStorage.getItem(`tf-map-view-${topicId}`) || "null");
     return saved ? { ...base, ...saved } : base;
