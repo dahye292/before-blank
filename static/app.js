@@ -6,7 +6,7 @@
 //   #/topic/:id              주제 > 대화 탭  (?turn=ID 로 특정 대화 위치로 이동)
 //   #/topic/:id/map          주제 > 마인드맵 탭
 const $app = document.getElementById("app");
-const cfg = { min_thought: 20, demo: false };
+const cfg = { min_thought: 1, demo: false };
 const state = {
   q: "",              // 홈 검색어
   filter: "all",      // all | starred | in_progress | done
@@ -169,7 +169,7 @@ const THOUGHT_PROMPTS = ["내가 생각하는 답은 …", "그렇게 생각하�
 function bindThought($t, $counter, onChange) {
   const update = () => {
     const n = $t.value.trim().length;
-    $counter.textContent = n >= cfg.min_thought ? `${n}자 · 이제 AI 답을 볼 수 있어요` : `${cfg.min_thought - n}자 더 쓰면 AI 답이 열려요`;
+    $counter.textContent = n >= cfg.min_thought ? "이제 AI 답을 볼 수 있어요" : "내 생각을 적으면 AI 답이 열려요";
     $counter.classList.toggle("ok", n >= cfg.min_thought);
     onChange?.();
   };
@@ -378,7 +378,7 @@ async function viewNewTopic() {
       </form>
       <ol class="flow-preview" aria-label="다음에 할 일">
         <li><span class="step-num">01</span> 질문을 적어요</li>
-        <li><span class="step-num">02</span> 내 생각을 ${cfg.min_thought}자 이상 먼저 써요</li>
+        <li><span class="step-num">02</span> AI 답을 보기 전에 내 생각을 먼저 써요</li>
         <li><span class="step-num">03</span> AI 답을 보고 비교해요</li>
       </ol>
     </div>`;
@@ -475,8 +475,8 @@ function bindTopicStar(id, topic) {
   };
 }
 
-// ---------- 메모함: AI 답에서 새는 것들을 붙잡아 두는 곳 ----------
-// 대화는 한 방향으로 이어 가고, AI가 말한 것 중 지금 따라가면 새는 것(확인할 것·할 일·마음에 드는 것)은
+// ---------- 메모함: AI 답에서 지금 다루지 않을 곁가지를 담아 두는 곳 ----------
+// 대화는 원래 주제로 이어 가고, AI가 말한 것 중 지금 다루지 않을 곁가지(확인할 것·할 일·마음에 드는 것)는
 // 드래그해서 여기에 담아 두고 우선순위와 완료로 관리한다.
 //   확인할 것: 모르는 말, 맞는지 알아볼 것 (AI에게 다시 물어볼 수도 있음)
 //   할 일: 내가 직접 해야 할 것
@@ -510,7 +510,7 @@ function renderNotes() {
       <h2>메모함 <span class="np-count" data-notes-count>${openNoteCount()}</span></h2>
       <button class="btn btn-ghost btn-sm np-close" data-np-close aria-label="메모함 닫기">닫기</button>
     </div>
-    <p class="np-help">AI 답에서 지금 따라가면 대화가 새는 내용은 <b>문장을 드래그</b>해서 여기에 담아 두세요. 대화는 한 방향으로 이어 가요.</p>
+    <p class="np-help">AI 답에서 지금 다루지 않을 내용은 <b>문장을 드래그</b>해서 여기에 담아 두세요. 대화는 원래 주제로 이어 가요.</p>
     <div class="np-filters">${chip("all", "전체")}${Object.entries(NOTE_KINDS).map(([k, v]) => chip(k, v)).join("")}</div>
     ${chatCtx.adding ? `
       <form class="np-add" id="np-add">
@@ -694,7 +694,7 @@ function renderChatTab($panel, topic, turns, opts) {
           <p>아래 입력창에 첫 질문을 적어 주세요. 이렇게 진행돼요.</p>
           <ol class="flow-preview">
             <li><span class="step-num">01</span> 질문을 적어요</li>
-            <li><span class="step-num">02</span> AI에게 보내기 전에 내 생각을 ${cfg.min_thought}자 이상 써요</li>
+            <li><span class="step-num">02</span> AI 답을 보기 전에 내 생각을 먼저 써요</li>
             <li><span class="step-num">03</span> AI 답을 보고, 내 생각과 비교해 메모해요</li>
           </ol>
         </div>`}</div>
@@ -813,7 +813,7 @@ async function streamAnswer(t) {
   }
 }
 
-// 입력창: ① 질문 → ② 내 생각(20자 이상) → AI 답 보기
+// 입력창: ① 질문 → ② 내 생각 → AI 답 보기
 // ---------- 첨부파일 ----------
 const FILE_TYPES = { ".txt": "텍스트", ".md": "텍스트", ".csv": "표", ".pdf": "PDF", ".png": "이미지", ".jpg": "이미지", ".jpeg": "이미지", ".webp": "이미지" };
 const MAX_FILES = 3, MAX_MB = 5;
@@ -1372,8 +1372,8 @@ function brandPanel() {
 
       <ol class="brand-steps">
         <li><span class="step-num">01</span><div><b>질문을 적어요</b><p>AI에게 물어보고 싶은 걸 먼저 적어요.</p></div></li>
-        <li><span class="step-num">02</span><div><b>내 생각을 먼저 써요</b><p>20자 이상 써야 AI 답이 열려요. 내 생각은 AI에게 보내지 않아요.</p></div></li>
-        <li><span class="step-num">03</span><div><b>새는 건 메모함에</b><p>AI 답에서 확인할 것, 할 일, 마음에 드는 아이디어는 드래그해서 담아 두고 대화는 한 방향으로 이어 가요.</p></div></li>
+        <li><span class="step-num">02</span><div><b>내 생각을 먼저 써요</b><p>내 생각을 적어야 AI 답이 열려요. 내 생각은 AI에게 보내지 않아요.</p></div></li>
+        <li><span class="step-num">03</span><div><b>곁가지는 메모함에</b><p>AI 답에서 확인할 것, 할 일, 마음에 드는 아이디어는 드래그해서 담아 두고, 대화는 원래 주제로 이어 가요.</p></div></li>
         <li><span class="step-num">04</span><div><b>마인드맵으로 정리돼요</b><p>나만의 관점, 겹치는 생각, AI만의 관점이 나뉘고, 누르면 그 대화로 이동해요.</p></div></li>
       </ol>
     </section>`;

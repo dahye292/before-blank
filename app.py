@@ -39,7 +39,7 @@ DB_PATH = Path(_arg("db") or os.environ.get("THINKFIRST_DB") or BASE_DIR / "data
 if not DB_PATH.is_absolute():
     DB_PATH = BASE_DIR / DB_PATH
 MODEL = "claude-opus-5-5"
-MIN_THOUGHT_LEN = 20  # 내 생각을 최소 이만큼은 써야 AI 답을 볼 수 있다
+MIN_THOUGHT_LEN = 1  # 글자 수 제한은 없지만, 내 생각을 한 글자라도 먼저 적어야 AI 답을 볼 수 있다
 
 load_dotenv(BASE_DIR / ".env")
 # 데모 모드: API 키 없이 화면 흐름을 확인하기 위한 가짜 AI. 실제 사용에서는 끈다.
@@ -794,7 +794,7 @@ def delete_topic(topic_id):
 
 
 # ---------- 메모함 ----------
-# AI 답에서 지금 따라가면 대화가 새는 것들을 붙잡아 두는 곳:
+# AI 답에서 지금 다루지 않을 곁가지를 담아 두는 곳:
 # 확인할 것(check) / 할 일(todo) / 마음에 드는 것(like) + 우선순위 + 완료
 NOTE_KINDS = ("check", "todo", "like")
 PRIORITIES = ("high", "mid", "low")
@@ -888,7 +888,7 @@ def create_turn(topic_id):
     if not question:
         return jsonify(error="질문을 입력해 주세요."), 400
     if len(thought) < MIN_THOUGHT_LEN:
-        return jsonify(error=f"내 생각을 {MIN_THOUGHT_LEN}자 이상 적어야 AI 답을 볼 수 있어요."), 400
+        return jsonify(error="내 생각을 먼저 적어야 AI 답을 볼 수 있어요."), 400
     db = get_db()
     if not own_topic(db, topic_id):
         return jsonify(error="주제를 찾을 수 없어요."), 404
