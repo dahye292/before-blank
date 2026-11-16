@@ -65,8 +65,8 @@
 :root {
   --r-control: 6px;
   --r-card: 8px;
-  --font: "Pretendard Variable", Pretendard, "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
-  --mono: "JetBrains Mono", "Fira Code", ui-monospace, "SF Mono", Consolas, monospace;
+  --font: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Consolas, monospace;
   font-family: var(--font);
 }
 
@@ -74,7 +74,7 @@
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--text);
-  font-size: 15px; line-height: 1.6; letter-spacing: -0.01em;
+  font-size: 15px; line-height: 1.6; letter-spacing: -0.005em;
   -webkit-font-smoothing: antialiased;
 }
 a { color: inherit; text-decoration: none; }
@@ -186,7 +186,7 @@ textarea.thought { min-height: 130px; border-left: 2px solid var(--mine); }
 .topic-row .star { flex: none; margin-left: 2px; }
 .topic-link { flex: 1; min-width: 0; display: flex; align-items: center; gap: 16px; padding: 13px 10px 13px 2px; }
 .topic-main { flex: 1; min-width: 0; }
-.topic-name { font-weight: 550; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topic-name { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topic-meta { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
 .topic-row.done .topic-name { color: var(--muted); }
 .chev { color: var(--quiet); font-size: 14px; }
@@ -393,7 +393,7 @@ textarea.thought { min-height: 130px; border-left: 2px solid var(--mine); }
 .brand { padding-top: 12px; }
 .brand-mark { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; color: var(--text-2); }
 .mascot.sm { width: 44px; height: 43px; }
-.brand-title { margin: 28px 0 40px; font-size: 52px; line-height: 1.12; font-weight: 650; letter-spacing: -0.045em; }
+.brand-title { margin: 28px 0 40px; font-size: 52px; line-height: 1.12; font-weight: 700; letter-spacing: -0.045em; }
 .brand-block h2 { font-size: 12.5px; font-weight: 600; color: var(--muted); margin: 0 0 12px; }
 .brand-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--hairline); }
 .brand-list li { padding: 12px 0 12px 20px; border-bottom: 1px solid var(--hairline); color: var(--text-2); position: relative; font-size: 15px; }
@@ -607,11 +607,11 @@ button.turn-chip { background: none; font: inherit; font-size: 11px; }
 
 /* ---------- 상단: 이름 · 계정 · 테마 스위치 ---------- */
 .home-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.wordmark { font-size: 13px; font-weight: 650; letter-spacing: -0.01em; color: var(--text-2); }
+.wordmark { font-size: 13px; font-weight: 700; letter-spacing: -0.01em; color: var(--text-2); }
 .top-right, .account { display: flex; align-items: center; gap: 2px; }
 .top-sep { width: 1px; height: 18px; background: var(--hairline-strong); margin: 0 10px; flex: none; }
 .brand-name { font-weight: 400; color: var(--muted); }
-.brand-name b { color: var(--text); font-weight: 650; margin-right: 4px; }
+.brand-name b { color: var(--text); font-weight: 700; margin-right: 4px; }
 
 /* 테마 스위치: 글자 버튼이 아니라 해·달이 있는 작은 스위치 */
 .theme-switch {
@@ -690,7 +690,7 @@ a.file-chip:hover { border-color: var(--quiet); color: var(--text); }
 /* ---------- 비포블랭크 아이콘 ---------- */
 .logo { width: 24px; height: 24px; flex: none; color: var(--text-2); }
 .wordmark { display: inline-flex; align-items: center; gap: 8px; font-weight: 400; color: var(--muted); }
-.wordmark b { color: var(--text); font-weight: 650; margin-right: 4px; }
+.wordmark b { color: var(--text); font-weight: 700; margin-right: 4px; }
 .brand-mark .logo { width: 28px; height: 28px; }
 .home-hero { margin-top: 4px; }
 

@@ -106,7 +106,7 @@ AI가 답을 잘 주는 것과 별개로, **생각의 주도권**이 나에게�
 
 - 마스코트(오리너구리): 생성형 AI 이미지 도구로 만든 그림을 배경만 지워 사용
 - 아이콘: 빈칸(점선 상자) 앞에 먼저 놓인 내 생각(점) — '빈칸을 채우기 전에, 내 생각 먼저'라는 이름의 뜻을 담아 직접 만든 SVG
-- 글꼴: [Pretendard](https://github.com/orioncactus/pretendard) (SIL OFL 1.1)
+- 글꼴: [IBM Plex Sans KR · IBM Plex Mono](https://github.com/IBM/plex) (SIL OFL 1.1, Google Fonts로 불러옴)
 - 디자인 참고: [Taste Skill](https://tasteskill.dev)의 원칙(AI가 만든 티 줄이기 — 그림자·알약 모양·색 남발 금지, 색은 의미에만), [oh-my-design](https://oh-my-design.kr)의 Linear DESIGN.md(어두운 바탕, 밝기 단계 위계, 얇은 선)
 
 ## 한계와 다음 계획

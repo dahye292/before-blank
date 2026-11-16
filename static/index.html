@@ -9,8 +9,10 @@
     // 화면이 깜빡이지 않도록, 그리기 전에 고른 테마부터 적용 (기본: 어둡게)
     try { if (localStorage.getItem("tf-theme") === "light") document.documentElement.dataset.theme = "light"; } catch (e) {}
   </script>
-  <!-- 글꼴: Pretendard (orioncactus/pretendard, OFL) -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <!-- 글꼴: IBM Plex Sans KR · IBM Plex Mono (Google Fonts, SIL OFL 1.1) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
