@@ -708,3 +708,7 @@ a.file-chip:hover { border-color: var(--quiet); color: var(--text); }
 :root[data-theme="dark"] body, :root:not([data-theme]) body { -webkit-font-smoothing: auto; }
 :root[data-theme="dark"] .node, :root:not([data-theme]) .node { border-color: var(--hairline-strong); }
 :root[data-theme="dark"] .block-body, :root[data-theme="dark"] .md { color: var(--text-2); }
+
+/* 홈 인사말: 큰 '주제' 대신 작은 인사 */
+.home-hero h1.greeting { font-size: 24px; font-weight: 600; letter-spacing: -0.03em; margin-top: 10px; }
+@media (max-width: 760px) { .home-hero h1.greeting { font-size: 21px; } }

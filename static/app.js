@@ -205,7 +205,7 @@ async function viewHome() {
       </div>
       <header class="home-hero">
         <div class="mascot">${mascot}</div>
-        <h1>주제</h1>
+        <h1 class="greeting">${esc(state.user?.name || "")}님, 안녕하세요</h1>
       </header>
       <div class="toolbar">
         <input type="search" id="search" placeholder="주제·질문·생각·답 검색" value="${esc(state.q)}">
