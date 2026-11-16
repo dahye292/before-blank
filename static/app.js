@@ -11,6 +11,7 @@ const state = {
   q: "",              // 홈 검색어
   filter: "all",      // all | starred | in_progress | done
   folder: "all",      // all | none(폴더 없음) | 폴더 id
+  doneOpen: false,    // 홈의 '완료' 구역을 펼쳤는지
   folders: null,
   drafts: {},         // 주제별 작성 중인 질문/생각 (탭을 오가도 유지)
   user: undefined,    // 로그인한 사람 (undefined: 아직 모름, null: 로그인 안 함)
@@ -187,37 +188,69 @@ function bindThought($t, $counter, onChange) {
 const promptButtons = () => `<div class="prompts">${THOUGHT_PROMPTS.map((p) => `<button type="button" data-p="${p}">${p}</button>`).join("")}</div>`;
 
 // ---------- 홈: 주제 목록 ----------
+// "어제", "3일 전"처럼 짧게
+function ago(iso) {
+  if (!iso) return "";
+  const d = new Date(iso), now = new Date();
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const diff = Math.round((day(now) - day(d)) / 86400000);
+  if (diff <= 0) return "오늘";
+  if (diff === 1) return "어제";
+  if (diff < 7) return `${diff}일 전`;
+  if (diff < 35) return `${Math.floor(diff / 7)}주 전`;
+  return `${d.getMonth() + 1}월 ${d.getDate()}일`;
+}
+const clip = (s, n) => (s && s.length > n ? s.slice(0, n).trimEnd() + "…" : s || "");
+
+// 상단: 이름 · (오른쪽) 테마 스위치 · 프로필 메뉴(설정·로그아웃)
+function topBar() {
+  const name = state.user?.name || "";
+  return `
+    <header class="topbar">
+      <a class="wordmark" href="#/">${LOGO}<span><b>비포블랭크</b> Before Blank</span>${cfg.demo ? `<span class="demo-pill">데모 모드</span>` : ""}</a>
+      <div class="top-right">
+        ${themeToggle()}
+        <div class="profile">
+          <button class="profile-btn" id="profile-btn" aria-haspopup="menu" aria-expanded="false">
+            <span class="avatar" aria-hidden="true">${esc(name.slice(0, 1))}</span><span class="profile-name">${esc(name)}</span><span class="caret" aria-hidden="true">▾</span>
+          </button>
+          <div class="profile-menu" id="profile-menu" role="menu" hidden>
+            <a role="menuitem" href="#/settings">설정</a>
+            <button role="menuitem" id="logout">로그아웃</button>
+          </div>
+        </div>
+      </div>
+    </header>`;
+}
+
+function bindTopBar() {
+  const $btn = document.getElementById("profile-btn"), $menu = document.getElementById("profile-menu");
+  $btn.onclick = (e) => { e.stopPropagation(); $menu.hidden = !$menu.hidden; $btn.setAttribute("aria-expanded", String(!$menu.hidden)); };
+  if (!bindTopBar.done) {   // 바깥을 누르거나 Esc면 메뉴 닫기 (한 번만 등록)
+    bindTopBar.done = true;
+    const shut = () => { const m = document.getElementById("profile-menu"); if (m) { m.hidden = true; document.getElementById("profile-btn")?.setAttribute("aria-expanded", "false"); } };
+    document.addEventListener("click", (e) => { if (!e.target.closest(".profile")) shut(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") shut(); });
+  }
+  document.getElementById("logout").onclick = logout;
+}
+
 async function viewHome() {
   const mascot = document.getElementById("mascot-template").innerHTML;
   $app.innerHTML = `
-    <div class="home">
-      <div class="home-top">
-        <span class="wordmark">${LOGO}<span><b>비포블랭크</b> Before Blank</span>${cfg.demo ? `<span class="demo-pill">데모 모드</span>` : ""}</span>
-        <div class="top-right">
-          <div class="account">
-            <span class="who">${esc(state.user?.name || "")}</span>
-            <button class="btn btn-ghost btn-sm" id="logout">로그아웃</button>
-            <button class="btn btn-ghost btn-sm danger" id="delete-account">탈퇴</button>
-          </div>
-          <span class="top-sep" aria-hidden="true"></span>
-          ${themeToggle()}
+    ${topBar()}
+    <div class="home2">
+      <aside class="side" aria-label="폴더"><div id="folders"></div></aside>
+      <section class="home-main">
+        <div class="resume" id="resume"><span class="mascot xs">${mascot}</span><p class="resume-text">&nbsp;</p></div>
+        <div class="toolbar">
+          <input type="search" id="search" placeholder="주제·질문·생각·답·메모 검색" value="${esc(state.q)}" aria-label="검색">
+          <a class="btn btn-primary" href="#/new">새 주제</a>
         </div>
-      </div>
-      <header class="home-hero">
-        <div class="mascot">${mascot}</div>
-        <h1 class="greeting">${esc(state.user?.name || "")}님, 안녕하세요</h1>
-      </header>
-      <div class="toolbar">
-        <input type="search" id="search" placeholder="주제·질문·생각·답 검색" value="${esc(state.q)}">
-        <a class="btn btn-primary" href="#/new">+ 새 주제</a>
-      </div>
-      <div class="folders" id="folders"></div>
-      <div class="filters" id="filters"></div>
-      <ul class="topic-rows" id="topic-rows"></ul>
+        <div id="topic-area"></div>
+      </section>
     </div>`;
-
-  document.getElementById("logout").onclick = logout;
-  document.getElementById("delete-account").onclick = deleteAccount;
+  bindTopBar();
   let timer;
   document.getElementById("search").addEventListener("input", (e) => {
     clearTimeout(timer);
@@ -226,49 +259,52 @@ async function viewHome() {
   await loadTopicRows();
 }
 
+// "어제 '주제'에서 '마지막 질문'을 고민하다 멈췄어요. 이어서 생각해 볼까요?"
+function renderResume(all) {
+  const $r = document.getElementById("resume");
+  if (!$r) return;
+  const mascot = $r.querySelector(".mascot").outerHTML;
+  const open = all.filter((t) => t.status === "in_progress");
+  const last = (open.length ? open : all).slice().sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""))[0];
+  let html;
+  if (!last) {
+    html = `<p class="resume-text">아직 주제가 없어요. 궁금한 게 생기면, AI에게 묻기 전에 내 생각부터 적어 볼까요?</p>
+            <a class="btn btn-primary btn-sm" href="#/new">첫 주제 만들기</a>`;
+  } else if (!last.last_question) {
+    html = `<p class="resume-text">${ago(last.updated_at)} <a href="#/topic/${last.id}">${esc(last.name)}</a>을(를) 만들고 첫 질문 전에 멈췄어요. 이어서 시작해 볼까요?</p>
+            <a class="btn btn-primary btn-sm" href="#/topic/${last.id}">이어서 생각하기</a>`;
+  } else {
+    html = `<p class="resume-text">${ago(last.updated_at)} <a href="#/topic/${last.id}">${esc(last.name)}</a>에서 <q>${esc(clip(last.last_question, 46))}</q>를 고민하다 멈췄어요. 이어서 생각해 볼까요?</p>
+            <a class="btn btn-primary btn-sm" href="#/topic/${last.id}">이어서 생각하기</a>`;
+  }
+  $r.innerHTML = mascot + `<div class="resume-body">${html}</div>`;
+}
+
 async function loadTopicRows() {
   const [all, folders] = await Promise.all([
     api(`/api/topics?${new URLSearchParams({ q: state.q })}`),
     api("/api/folders"),
   ]);
   state.folders = folders;
-  const $rows = document.getElementById("topic-rows");
-  if (!$rows) return;
+  const $area = document.getElementById("topic-area");
+  if (!$area) return;
+  if (!state.q) renderResume(all);
   // 고른 폴더가 지워졌으면 전체로
   if (typeof state.folder === "number" && !folders.some((f) => f.id === state.folder)) state.folder = "all";
 
-  const inFolder = all.filter((t) =>
-    state.folder === "all" ? true : state.folder === "none" ? t.folder_id == null : t.folder_id === state.folder);
-  const counts = {
-    all: inFolder.length,
-    starred: inFolder.filter((t) => t.is_starred).length,
-    in_progress: inFolder.filter((t) => t.status === "in_progress").length,
-    done: inFolder.filter((t) => t.status === "done").length,
-  };
-  const pass = {
-    all: () => true, starred: (t) => t.is_starred,
-    in_progress: (t) => t.status === "in_progress", done: (t) => t.status === "done",
-  }[state.filter];
-  const list = inFolder.filter(pass);
-  const folderName = Object.fromEntries(folders.map((f) => [f.id, f.name]));
-
-  // 폴더 줄: 전체 · 폴더 없음 · 폴더들 · + 새 폴더
-  const noneCount = all.filter((t) => t.folder_id == null).length;
-  const fchip = (key, label, n) =>
-    `<button class="folder-chip ${state.folder === key ? "active" : ""}" data-folder="${key}">${esc(label)} <span>${n}</span></button>`;
+  // ---- 왼쪽 폴더 목록 (숫자 없이) ----
   const cur = typeof state.folder === "number" ? folders.find((f) => f.id === state.folder) : null;
+  const fitem = (key, label) =>
+    `<li><button class="side-item ${state.folder === key ? "active" : ""}" data-folder="${key}" ${state.folder === key ? 'aria-current="true"' : ""}>${esc(label)}</button>
+      ${cur && key === cur.id ? `<span class="side-actions"><button class="link" id="folder-rename">이름 바꾸기</button><button class="link danger" id="folder-delete">삭제</button></span>` : ""}</li>`;
   document.getElementById("folders").innerHTML = `
-    <div class="folder-list" role="tablist" aria-label="폴더">
-      ${fchip("all", "모든 주제", all.length)}
-      ${fchip("none", "폴더 없음", noneCount)}
-      ${folders.map((f) => fchip(f.id, f.name, all.filter((t) => t.folder_id === f.id).length)).join("")}
-      <button class="folder-add" id="folder-add">+ 새 폴더</button>
-    </div>
-    ${cur ? `<div class="folder-actions">
-      <span>폴더 <b>${esc(cur.name)}</b></span>
-      <button class="btn btn-ghost btn-sm" id="folder-rename">이름 바꾸기</button>
-      <button class="btn btn-ghost btn-sm danger" id="folder-delete">폴더 삭제</button>
-    </div>` : ""}`;
+    <h2 class="side-title">폴더</h2>
+    <ul class="side-list">
+      ${fitem("all", "모든 주제")}
+      ${folders.map((f) => fitem(f.id, f.name)).join("")}
+      ${fitem("none", "폴더 없음")}
+    </ul>
+    <button class="side-add" id="folder-add">+ 새 폴더</button>`;
   document.querySelectorAll("[data-folder]").forEach((b) => (b.onclick = () => {
     const k = b.dataset.folder;
     state.folder = k === "all" || k === "none" ? k : Number(k);
@@ -294,48 +330,74 @@ async function loadTopicRows() {
     };
   }
 
-  const chip = (k, label) => `<button class="filter ${state.filter === k ? "active" : ""}" data-f="${k}">${label} <span>${counts[k]}</span></button>`;
-  document.getElementById("filters").innerHTML =
-    chip("all", "전체") + chip("starred", "★ 중요") + chip("in_progress", "진행중") + chip("done", "완료");
-  document.querySelectorAll(".filter").forEach((b) => (b.onclick = () => { state.filter = b.dataset.f; loadTopicRows(); }));
-
-  if (!list.length) {
-    $rows.innerHTML = `<li class="empty">${
-      state.q ? "찾는 주제가 없어요."
-      : inFolder.length ? { starred: "중요 표시한 주제가 없어요. ☆을 눌러 중요한 주제를 모아 보세요.", in_progress: "진행중인 주제가 없어요.", done: "아직 완료한 주제가 없어요." }[state.filter]
-      : all.length ? "이 폴더에는 아직 주제가 없어요.<br>주제 오른쪽의 폴더 메뉴로 옮기거나, 새 주제를 만들어 보세요."
-      : "아직 주제가 없어요.<br>궁금한 게 생겼다면, AI에게 묻기 전에 내 생각부터 적어 보세요."}</li>`;
-    return;
-  }
+  // ---- 목록: 중요 카드 / 진행 중 / 접힌 완료 ----
+  const inFolder = all.filter((t) =>
+    state.folder === "all" ? true : state.folder === "none" ? t.folder_id == null : t.folder_id === state.folder);
+  const pinned = inFolder.filter((t) => t.is_starred);
+  const rest = inFolder.filter((t) => !t.is_starred);
+  const open = rest.filter((t) => t.status === "in_progress");
+  const done = rest.filter((t) => t.status === "done");
+  const meta = (t) => [`대화 ${t.turn_count}`, t.open_notes ? `메모 ${t.open_notes}` : "", ago(t.updated_at)].filter(Boolean).join(" · ");
   const moveSelect = (t) => `
     <select class="move" data-move="${t.id}" aria-label="${esc(t.name)} 폴더 옮기기" title="폴더 옮기기">
-      <option value="" ${t.folder_id == null ? "selected" : ""}>폴더 없음</option>
-      ${folders.map((f) => `<option value="${f.id}" ${t.folder_id === f.id ? "selected" : ""}>${esc(f.name)}</option>`).join("")}
+      <option value="__keep" selected hidden>옮기기</option>
+      <option value="" ${t.folder_id == null ? "disabled" : ""}>폴더 없음${t.folder_id == null ? " (지금)" : ""}</option>
+      ${folders.map((f) => `<option value="${f.id}" ${t.folder_id === f.id ? "disabled" : ""}>${esc(f.name)}${t.folder_id === f.id ? " (지금)" : ""}</option>`).join("")}
       <option value="__new">+ 새 폴더…</option>
     </select>`;
-  $rows.innerHTML = list.map((t) => `
+  const row = (t) => `
     <li class="topic-row ${t.status}" data-id="${t.id}">
       ${starBtn(t.is_starred, t.name)}
       <a class="topic-link" href="#/topic/${t.id}">
-        <div class="topic-main">
-          <div class="topic-name">${esc(t.name)}</div>
-          <div class="topic-meta">${state.folder === "all" && t.folder_id != null ? `<span class="meta-folder">${esc(folderName[t.folder_id] || "")}</span> · ` : ""}대화 ${t.turn_count}개${t.open_notes ? ` · 메모 ${t.open_notes}` : ""} · ${fmtDate(t.updated_at, false)}${t.last_question ? ` · ${esc(t.last_question)}` : ""}</div>
-        </div>
-        ${statusBadge(t.status)}
+        <span class="topic-name">${esc(t.name)}</span>
+        <span class="topic-q">${t.last_question ? esc(t.last_question) : "아직 질문 전이에요"}</span>
+        <span class="topic-meta">${meta(t)}</span>
       </a>
       ${moveSelect(t)}
-    </li>`).join("");
+    </li>`;
+  const card = (t) => `
+    <li class="pin-card ${t.status}" data-id="${t.id}">
+      <div class="pin-top">${starBtn(true, t.name)}${t.status === "done" ? `<span class="pin-done">완료</span>` : ""}</div>
+      <a class="pin-link" href="#/topic/${t.id}">
+        <span class="pin-title">${esc(t.name)}</span>
+        <span class="pin-q">${t.last_question ? esc(t.last_question) : "아직 질문 전이에요"}</span>
+        <span class="topic-meta">${meta(t)}</span>
+      </a>
+    </li>`;
 
-  $rows.querySelectorAll("[data-star]").forEach((b) => {
+  if (!inFolder.length) {
+    $area.innerHTML = `<p class="empty">${
+      state.q ? "찾는 주제가 없어요."
+      : all.length ? "이 폴더에는 아직 주제가 없어요. 주제 오른쪽의 폴더 메뉴로 옮기거나, 새 주제를 만들어 보세요."
+      : "아직 주제가 없어요. 궁금한 게 생겼다면, AI에게 묻기 전에 내 생각부터 적어 보세요."}</p>`;
+    return;
+  }
+  const doneOpen = state.doneOpen ? "open" : "";
+  $area.innerHTML = `
+    ${pinned.length ? `<section class="pins" aria-label="중요 표시한 주제"><ul class="pin-grid">${pinned.map(card).join("")}</ul></section>` : ""}
+    ${open.length || !pinned.length ? `
+    <section class="group" aria-label="진행 중">
+      <h2 class="group-title">진행 중</h2>
+      ${open.length ? `<ul class="topic-rows">${open.map(row).join("")}</ul>` : `<p class="group-empty">진행 중인 주제가 없어요.</p>`}
+    </section>` : ""}
+    ${done.length ? `
+    <details class="group done-group" id="done-group" ${doneOpen}>
+      <summary class="group-title">완료 <span class="group-count">${done.length}</span></summary>
+      <ul class="topic-rows">${done.map(row).join("")}</ul>
+    </details>` : ""}`;
+  document.getElementById("done-group")?.addEventListener("toggle", (e) => { state.doneOpen = e.target.open; });
+
+  $area.querySelectorAll("[data-star]").forEach((b) => {
     b.onclick = async () => {
-      const id = b.closest(".topic-row").dataset.id;
+      const id = b.closest("[data-id]").dataset.id;
       const on = b.getAttribute("aria-pressed") !== "true";
       try { await api(`/api/topics/${id}`, { method: "PATCH", body: { is_starred: on } }); loadTopicRows(); }
       catch (err) { toast(err.message); }
     };
   });
-  $rows.querySelectorAll("[data-move]").forEach((sel) => {
+  $area.querySelectorAll("[data-move]").forEach((sel) => {
     sel.onchange = async () => {
+      if (sel.value === "__keep") return;
       let folderId = sel.value === "" ? null : sel.value;
       try {
         if (folderId === "__new") {
@@ -350,6 +412,36 @@ async function loadTopicRows() {
       } catch (err) { toast(err.message); loadTopicRows(); }
     };
   });
+}
+
+// ---------- 설정: 계정 정보 · 화면 · 탈퇴 ----------
+function viewSettings() {
+  const u = state.user || {};
+  $app.innerHTML = `
+    ${topBar()}
+    <div class="narrow settings">
+      <a class="back" href="#/">← 주제 목록</a>
+      <h1 class="page-title">설정</h1>
+      <section class="set-block">
+        <h2>계정</h2>
+        <dl class="set-list">
+          <div><dt>이름</dt><dd>${esc(u.name || "")}</dd></div>
+          <div><dt>이메일</dt><dd>${esc(u.email || "")}</dd></div>
+        </dl>
+        <p class="set-help">비밀번호를 바꾸려면 로그아웃한 뒤 로그인 화면의 '비밀번호를 잊었나요?'를 이용해 주세요.</p>
+      </section>
+      <section class="set-block">
+        <h2>화면</h2>
+        <div class="set-row"><span>어두운 화면</span>${themeToggle()}</div>
+      </section>
+      <section class="set-block danger-zone">
+        <h2>탈퇴</h2>
+        <p class="set-help">탈퇴하면 계정과 모든 주제·대화·메모·첨부파일이 바로 지워지고 되돌릴 수 없어요.</p>
+        <button class="btn btn-sm danger-outline" id="delete-account">탈퇴하기</button>
+      </section>
+    </div>`;
+  bindTopBar();
+  document.getElementById("delete-account").onclick = deleteAccount;
 }
 
 // ---------- 새 주제: 이름만 정하고 바로 대화 화면으로 ----------
@@ -1627,6 +1719,7 @@ async function route() {
   if (path === "/forgot") return viewForgot();
   if (path === "/reset") return viewReset(qs.get("token") || "");
   let m;
+  if (path === "/settings") return viewSettings();
   if (path === "/new") await viewNewTopic();
   else if ((m = path.match(/^\/topic\/(\d+)\/map$/))) { window.scrollTo(0, 0); await viewTopic(Number(m[1]), "map"); }
   else if ((m = path.match(/^\/topic\/(\d+)$/))) {
