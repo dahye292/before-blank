@@ -130,6 +130,14 @@ def init_db():
                 gender TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS ai_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                day TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ai_usage_day ON ai_usage(day, user_id);
             CREATE TABLE IF NOT EXISTS side_notes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
@@ -258,6 +266,8 @@ def init_db():
         # 폴더 기능 이전 DB: 주제에 폴더 칸 추가 (비어 있으면 '폴더 없음')
         if "folder_id" not in columns(db, "topics"):
             db.execute("ALTER TABLE topics ADD COLUMN folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL")
+        if "invite_code" not in columns(db, "users"):
+            db.execute("ALTER TABLE users ADD COLUMN invite_code TEXT")
         db.commit()
     finally:
         db.close()
@@ -304,7 +314,116 @@ def protect_api():
 
 
 def user_json(row):
-    return {"id": row["id"], "name": row["name"], "email": row["email"]}
+    return {"id": row["id"], "name": row["name"], "email": row["email"], "ai": ai_status(row)}
+
+
+# ---------- AI 사용 권한 (내 API 키를 아무나 쓰지 못하게) ----------
+# - AI_OWNER_EMAILS: 언제나 AI를 쓸 수 있는 계정(나). 쉼표로 여러 개.
+# - AI_INVITE_CODES: 초대 코드. "코드" 또는 "코드:최대인원". 코드를 .env에서 지우면 그 코드로 들어온 사람은 바로 AI를 못 쓴다.
+# - AI_DAILY_LIMIT_PER_USER / AI_DAILY_LIMIT_INVITED: 초대받은 한 사람의 하루 한도 / 초대받은 사람 전체의 하루 한도.
+# AI를 부를 때(답 1번, 마인드맵 정리 1번)마다 1회로 센다. 이미 받은 답·저장된 마인드맵을 다시 보는 건 세지 않는다.
+# 데모 모드는 API를 쓰지 않으므로 기본으로 검사하지 않는다(AI_GATE_IN_DEMO=1이면 검사 — 테스트용).
+
+def _env_list(name):
+    return [x.strip() for x in os.environ.get(name, "").split(",") if x.strip()]
+
+
+def owner_emails():
+    return {e.lower() for e in _env_list("AI_OWNER_EMAILS")}
+
+
+def invite_codes():
+    """{코드: 최대 인원 또는 None}"""
+    out = {}
+    for item in _env_list("AI_INVITE_CODES"):
+        code, _, cap = item.partition(":")
+        code = code.strip()
+        if code:
+            out[code] = int(cap) if cap.strip().isdigit() else None
+    return out
+
+
+def _int_env(name, default):
+    try:
+        return max(0, int(os.environ.get(name, default)))
+    except ValueError:
+        return default
+
+
+def ai_gate_on():
+    return not DEMO or os.environ.get("AI_GATE_IN_DEMO") == "1"
+
+
+def today():
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def ai_access(row):
+    """'owner' | 'invited' | 'none'"""
+    if not ai_gate_on():
+        return "owner"
+    if row["email"].lower() in owner_emails():
+        return "owner"
+    code = row["invite_code"] if "invite_code" in row.keys() else None
+    if code and code in invite_codes():
+        return "invited"
+    return "none"
+
+
+def ai_status(row):
+    access = ai_access(row)
+    out = {"access": access}
+    if access == "invited":
+        used = get_db().execute("SELECT COUNT(*) FROM ai_usage WHERE user_id = ? AND day = ?", (row["id"], today())).fetchone()[0]
+        out.update(used_today=used, daily_limit=_int_env("AI_DAILY_LIMIT_PER_USER", 20))
+    return out
+
+
+def ai_check(db, kind):
+    """AI를 부르기 직전에 호출. 쓸 수 있으면 사용 기록을 남기고 None, 아니면 (오류 응답, 상태 코드)."""
+    if not ai_gate_on():
+        return None
+    user = db.execute("SELECT * FROM users WHERE id = ?", (current_user_id(),)).fetchone()
+    access = ai_access(user)
+    if access == "none":
+        return jsonify(error="이 계정은 아직 AI 답을 쓸 수 없어요. 초대 코드가 있다면 설정에서 입력해 주세요.", code="no_ai_access"), 403
+    if access == "invited":
+        day = today()
+        mine = db.execute("SELECT COUNT(*) FROM ai_usage WHERE user_id = ? AND day = ?", (user["id"], day)).fetchone()[0]
+        if mine >= _int_env("AI_DAILY_LIMIT_PER_USER", 20):
+            return jsonify(error="오늘 쓸 수 있는 AI 횟수를 다 썼어요. 내일 다시 이어서 생각해 봐요.", code="ai_daily_limit"), 429
+        total = db.execute(
+            """SELECT COUNT(*) FROM ai_usage a JOIN users u ON u.id = a.user_id
+               WHERE a.day = ? AND u.invite_code IS NOT NULL""", (day,)).fetchone()[0]
+        if total >= _int_env("AI_DAILY_LIMIT_INVITED", 100):
+            return jsonify(error="오늘은 AI 사용량이 많아 잠시 쉬어 가요. 내일 다시 시도해 주세요.", code="ai_total_limit"), 429
+    db.execute("INSERT INTO ai_usage (user_id, kind, day, created_at) VALUES (?, ?, ?, ?)", (user["id"], kind, today(), now()))
+    db.commit()
+    return None
+
+
+_invite_fails = {}  # 접속 주소(IP)별 초대 코드 실패 기록 — 가입을 새로 해 가며 코드를 맞혀 보는 것도 막는다
+
+
+def redeem_invite(db, uid, code):
+    """초대 코드 확인. 성공하면 None, 실패하면 오류 문구."""
+    key = request.remote_addr or "?"
+    fails = [t for t in _invite_fails.get(key, []) if time.time() - t < 900]
+    if len(fails) >= 5:
+        return "초대 코드를 너무 여러 번 틀렸어요. 15분 뒤에 다시 시도해 주세요."
+    codes = invite_codes()
+    match = next((c for c in codes if secrets.compare_digest(c.encode(), code.encode())), None)
+    if not match:
+        _invite_fails[key] = fails + [time.time()]
+        return "초대 코드가 맞지 않아요."
+    cap = codes[match]
+    if cap is not None:
+        used = db.execute("SELECT COUNT(*) FROM users WHERE invite_code = ? AND id != ?", (match, uid)).fetchone()[0]
+        if used >= cap:
+            return "이 초대 코드는 정원이 다 찼어요."
+    db.execute("UPDATE users SET invite_code = ? WHERE id = ?", (match, uid))
+    _invite_fails.pop(key, None)
+    return None
 
 
 @app.post("/api/signup")
@@ -337,6 +456,7 @@ def signup():
         errors["gender"] = "성별을 골라 주세요."
     if not d.get("agree"):
         errors["agree"] = "개인정보 수집·이용에 동의해야 가입할 수 있어요."
+    invite = str(d.get("invite_code", "")).strip()  # 선택. 맞는지는 가입 처리 중에 redeem_invite로 확인
 
     db = get_db()
     if "email" not in errors and db.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone():
@@ -350,6 +470,11 @@ def signup():
         (name, email, generate_password_hash(password), age, gender, now()),
     )
     uid = cur.lastrowid
+    if invite:
+        err = redeem_invite(db, uid, invite)
+        if err:
+            db.rollback()
+            return jsonify(error="입력한 내용을 확인해 주세요.", fields={"invite_code": err}), 400
     if first_user:
         # 회원 기능이 생기기 전에 혼자 쓰던 기록은 첫 번째 가입자의 것으로 옮긴다
         db.execute("UPDATE topics SET user_id = ? WHERE user_id IS NULL", (uid,))
@@ -357,7 +482,7 @@ def signup():
     session.clear()
     session.permanent = True
     session["uid"] = uid
-    return jsonify(user={"id": uid, "name": name, "email": email}), 201
+    return jsonify(user=user_json(db.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone())), 201
 
 
 @app.post("/api/login")
@@ -499,6 +624,20 @@ def me():
     if uid and not user:
         session.clear()
     return jsonify(user=user_json(user) if user else None)
+
+
+@app.post("/api/me/invite")
+@login_required
+def use_invite():
+    code = str((request.json or {}).get("code", "")).strip()
+    if not code:
+        return jsonify(error="초대 코드를 입력해 주세요."), 400
+    db = get_db()
+    err = redeem_invite(db, current_user_id(), code)
+    if err:
+        return jsonify(error=err), 429 if "15분" in err else 400
+    db.commit()
+    return jsonify(user=user_json(db.execute("SELECT * FROM users WHERE id = ?", (current_user_id(),)).fetchone()))
 
 
 def own_topic(db, topic_id):
@@ -976,6 +1115,9 @@ def answer(turn_id):
         return Response(turn["ai_answer"], mimetype="text/plain; charset=utf-8")
     if not DEMO and not os.environ.get("ANTHROPIC_API_KEY"):
         return jsonify(error="ANTHROPIC_API_KEY가 설정되지 않았어요. think-first/.env 파일을 확인해 주세요."), 500
+    blocked = ai_check(db, "answer")
+    if blocked:
+        return blocked
 
     messages = history_messages(db, turn)
     topic_id = turn["topic_id"]
@@ -1262,6 +1404,9 @@ def mindmap(topic_id):
             return jsonify({**cached, "stale": True})
     if not DEMO and not os.environ.get("ANTHROPIC_API_KEY"):
         return jsonify(error="ANTHROPIC_API_KEY가 설정되지 않았어요. think-first/.env 파일을 확인해 주세요."), 500
+    blocked = ai_check(db, "mindmap")
+    if blocked:
+        return blocked
     try:
         data = clean_mindmap(build_mindmap(topic["name"], turns, db), {t["id"] for t in turns}, att_turn)
     except anthropic.APIStatusError as e:

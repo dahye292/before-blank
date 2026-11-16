@@ -1141,3 +1141,8 @@ input[type=text], input[type=search], textarea { font-size: var(--fs-body); padd
   .brand-en { margin-bottom: var(--sp-5); font-size: var(--fs-body); }
 }
 .nf { padding: 0 6px; }
+
+/* 설정: 초대 코드 */
+.invite-form { display: flex; gap: var(--sp-1); margin-top: var(--sp-2); max-width: 360px; }
+.invite-form input { flex: 1; min-width: 0; height: var(--h-control); }
+.set-num { color: var(--brand); font-weight: 700; }

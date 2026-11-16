@@ -414,6 +414,42 @@ async function loadTopicRows() {
   });
 }
 
+// ---------- 설정: AI 사용 (초대 코드) ----------
+function aiBlock(ai = { access: "owner" }) {
+  if (ai.access === "owner") {
+    return `<h2>AI 사용</h2><p class="set-help">이 계정은 AI 답과 마인드맵 정리를 쓸 수 있어요.</p>`;
+  }
+  if (ai.access === "invited") {
+    return `<h2>AI 사용</h2>
+      <p class="set-help">초대 코드로 AI를 쓰고 있어요. 오늘 <b class="set-num">${ai.used_today}</b> / ${ai.daily_limit}회 썼어요.</p>
+      <p class="set-help">AI 답 1번, 마인드맵 정리 1번이 각각 1회예요. 이미 받은 답을 다시 보는 건 세지 않아요.</p>`;
+  }
+  return `<h2>AI 사용</h2>
+    <p class="set-help">AI 답과 마인드맵 정리는 초대받은 계정만 쓸 수 있어요. 질문·내 생각·메모는 그대로 쓸 수 있어요.</p>
+    <form class="invite-form" id="invite-form" novalidate>
+      <input type="text" id="invite-input" placeholder="초대 코드" autocomplete="off" maxlength="64" aria-label="초대 코드">
+      <button class="btn btn-primary" type="submit">확인</button>
+    </form>
+    <p class="form-err" id="invite-err" role="alert"></p>`;
+}
+
+function bindAiBlock() {
+  const $f = document.getElementById("invite-form");
+  if (!$f) return;
+  $f.onsubmit = async (e) => {
+    e.preventDefault();
+    const code = document.getElementById("invite-input").value.trim();
+    const $err = document.getElementById("invite-err");
+    $err.textContent = "";
+    try {
+      const { user } = await api("/api/me/invite", { method: "POST", body: { code } });
+      state.user = user;
+      document.getElementById("ai-block").innerHTML = aiBlock(user.ai);
+      toast("이제 AI 답을 쓸 수 있어요");
+    } catch (err) { $err.textContent = err.message; }
+  };
+}
+
 // ---------- 설정: 계정 정보 · 화면 · 탈퇴 ----------
 function viewSettings() {
   const u = state.user || {};
@@ -430,6 +466,7 @@ function viewSettings() {
         </dl>
         <p class="set-help">비밀번호를 바꾸려면 로그아웃한 뒤 로그인 화면의 '비밀번호를 잊었나요?'를 이용해 주세요.</p>
       </section>
+      <section class="set-block" id="ai-block">${aiBlock(u.ai)}</section>
       <section class="set-block">
         <h2>화면</h2>
         <div class="set-row"><span>어두운 화면</span>${themeToggle()}</div>
@@ -442,6 +479,7 @@ function viewSettings() {
     </div>`;
   bindTopBar();
   document.getElementById("delete-account").onclick = deleteAccount;
+  bindAiBlock();
 }
 
 // ---------- 새 주제: 이름만 정하고 바로 대화 화면으로 ----------
@@ -877,7 +915,9 @@ async function streamAnswer(t) {
     if (res.status === 401) { state.user = null; location.hash = "#/login"; return; }
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || "AI 답을 받지 못했어요.");
+      const e = new Error(data.error || "AI 답을 받지 못했어요.");
+      e.code = data.code;
+      throw e;
     }
     const reader = res.body.getReader();
     const dec = new TextDecoder();
@@ -894,6 +934,11 @@ async function streamAnswer(t) {
     renderMemo(t);
   } catch (err) {
     $body.innerHTML = `<p class="err">${esc(err.message)}</p>`;
+    if (err.code === "no_ai_access") {
+      // 다시 시도해도 같으니, 초대 코드를 넣는 곳으로 안내
+      $body.insertAdjacentHTML("afterend", `<a class="btn btn-brand-line btn-sm" data-ask href="#/settings">초대 코드 입력하러 가기 →</a>`);
+      return;
+    }
     const retry = document.createElement("button");
     retry.className = "btn btn-primary btn-sm";
     retry.dataset.ask = "";
@@ -1547,6 +1592,7 @@ function viewSignup() {
           <span class="fld-err" data-err="gender"></span>
         </div>
       </div>
+      ${field("invite_code", "초대 코드 (선택)", `<input type="text" id="invite_code" autocomplete="off" maxlength="64">`, "받은 초대 코드가 있으면 AI 답을 바로 쓸 수 있어요. 나중에 설정에서 넣어도 돼요.")}
       <div class="agree">
         <label><input type="checkbox" id="agree"> <span>개인정보 수집·이용에 동의해요 (필수)</span></label>
         <details>
@@ -1583,6 +1629,7 @@ function viewSignup() {
       name: $f.name.value, email: $f.email.value, password: $f.password.value,
       password_confirm: $f.password_confirm.value, age: $f.age.value,
       gender: $f.querySelector("input[name=gender]:checked")?.value || "", agree: $f.agree.checked,
+      invite_code: $f.invite_code.value.trim(),
     };
     try {
       const res = await fetch("/api/signup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
