@@ -115,9 +115,17 @@ def init_db():
                 gender TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS folders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_user_name ON folders(user_id, name);
             CREATE TABLE IF NOT EXISTS topics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL,
                 name TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT,
@@ -196,6 +204,9 @@ def init_db():
             )
         # 같은 사람 안에서만 주제 이름이 겹치지 않게
         db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_topics_user_name ON topics(user_id, name)")
+        # 폴더 기능 이전 DB: 주제에 폴더 칸 추가 (비어 있으면 '폴더 없음')
+        if "folder_id" not in columns(db, "topics"):
+            db.execute("ALTER TABLE topics ADD COLUMN folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL")
         db.commit()
     finally:
         db.close()
@@ -359,10 +370,80 @@ def own_turn(db, turn_id):
     ).fetchone()
 
 
+# ---------- 폴더 (주제를 묶는 곳. 없어도 쓸 수 있다) ----------
+
+def own_folder(db, folder_id):
+    return db.execute("SELECT * FROM folders WHERE id = ? AND user_id = ?", (folder_id, current_user_id())).fetchone()
+
+
+def folder_name_error(db, name, exclude_id=None):
+    if not name:
+        return "폴더 이름을 입력해 주세요."
+    if len(name) > 30:
+        return "폴더 이름은 30자 이내로 입력해 주세요."
+    row = db.execute("SELECT id FROM folders WHERE user_id = ? AND name = ?", (current_user_id(), name)).fetchone()
+    if row and row["id"] != exclude_id:
+        return "이미 있는 폴더 이름이에요."
+    return None
+
+
+@app.get("/api/folders")
+@login_required
+def list_folders():
+    rows = get_db().execute(
+        """SELECT f.id, f.name, COUNT(t.id) AS topic_count
+           FROM folders f LEFT JOIN topics t ON t.folder_id = f.id
+           WHERE f.user_id = ? GROUP BY f.id ORDER BY f.name""",
+        (current_user_id(),),
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.post("/api/folders")
+@login_required
+def create_folder():
+    db = get_db()
+    name = str((request.json or {}).get("name", "")).strip()
+    err = folder_name_error(db, name)
+    if err:
+        return jsonify(error=err), 400
+    cur = db.execute("INSERT INTO folders (user_id, name, created_at) VALUES (?, ?, ?)", (current_user_id(), name, now()))
+    db.commit()
+    return jsonify(id=cur.lastrowid, name=name), 201
+
+
+@app.patch("/api/folders/<int:folder_id>")
+@login_required
+def rename_folder(folder_id):
+    db = get_db()
+    if not own_folder(db, folder_id):
+        return jsonify(error="폴더를 찾을 수 없어요."), 404
+    name = str((request.json or {}).get("name", "")).strip()
+    err = folder_name_error(db, name, exclude_id=folder_id)
+    if err:
+        return jsonify(error=err), 400
+    db.execute("UPDATE folders SET name = ? WHERE id = ?", (name, folder_id))
+    db.commit()
+    return jsonify(ok=True)
+
+
+@app.delete("/api/folders/<int:folder_id>")
+@login_required
+def delete_folder(folder_id):
+    """폴더만 지운다. 안에 있던 주제는 지우지 않고 '폴더 없음'으로 옮긴다."""
+    db = get_db()
+    if not own_folder(db, folder_id):
+        return jsonify(error="폴더를 찾을 수 없어요."), 404
+    db.execute("UPDATE topics SET folder_id = NULL WHERE folder_id = ? AND user_id = ?", (folder_id, current_user_id()))
+    db.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
+    db.commit()
+    return jsonify(ok=True)
+
+
 # ---------- 주제 ----------
 
 TOPIC_SELECT = """
-    SELECT t.id, t.name, t.is_starred, t.status, t.created_at, t.updated_at,
+    SELECT t.id, t.name, t.folder_id, t.is_starred, t.status, t.created_at, t.updated_at,
            COUNT(u.id) AS turn_count,
            (SELECT question FROM turns WHERE topic_id = t.id ORDER BY id DESC LIMIT 1) AS last_question
     FROM topics t LEFT JOIN turns u ON u.topic_id = t.id
@@ -394,10 +475,13 @@ def create_topic():
     db = get_db()
     if db.execute("SELECT 1 FROM topics WHERE name = ? AND user_id = ?", (name, current_user_id())).fetchone():
         return jsonify(error="이미 있는 주제 이름이에요."), 409
+    folder_id = (request.json or {}).get("folder_id")
+    if folder_id is not None and not own_folder(db, folder_id):
+        return jsonify(error="폴더를 찾을 수 없어요."), 404
     ts = now()
     cur = db.execute(
-        "INSERT INTO topics (user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-        (current_user_id(), name, ts, ts),
+        "INSERT INTO topics (user_id, folder_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        (current_user_id(), folder_id, name, ts, ts),
     )
     db.commit()
     return jsonify(id=cur.lastrowid), 201
@@ -434,6 +518,11 @@ def update_topic(topic_id):
             return jsonify(error="이미 있는 주제 이름이에요."), 409
     if "is_starred" in data:
         db.execute("UPDATE topics SET is_starred = ? WHERE id = ?", (1 if data["is_starred"] else 0, topic_id))
+    if "folder_id" in data:
+        fid = data["folder_id"]
+        if fid is not None and not own_folder(db, fid):
+            return jsonify(error="폴더를 찾을 수 없어요."), 404
+        db.execute("UPDATE topics SET folder_id = ? WHERE id = ?", (fid, topic_id))
     if data.get("status") in ("in_progress", "done"):
         db.execute("UPDATE topics SET status = ? WHERE id = ?", (data["status"], topic_id))
     db.commit()
@@ -621,14 +710,27 @@ SHARED_POINT = {
     "required": ["label", "detail", "kind", "turn_ids"],
     "additionalProperties": False,
 }
+UNCERTAIN_POINT = {
+    "type": "object",
+    "properties": {
+        "mine_label": {"type": "string"},
+        "ai_label": {"type": "string"},
+        "shared_label": {"type": "string"},
+        "question": {"type": "string"},
+        "turn_ids": {"type": "array", "items": {"type": "integer"}},
+    },
+    "required": ["mine_label", "ai_label", "shared_label", "question", "turn_ids"],
+    "additionalProperties": False,
+}
 MINDMAP_SCHEMA = {
     "type": "object",
     "properties": {
         "mine_only": {"type": "array", "items": POINT},
         "shared": {"type": "array", "items": SHARED_POINT},
         "ai_only": {"type": "array", "items": POINT},
+        "uncertain": {"type": "array", "items": UNCERTAIN_POINT},
     },
-    "required": ["mine_only", "shared", "ai_only"],
+    "required": ["mine_only", "shared", "ai_only", "uncertain"],
     "additionalProperties": False,
 }
 
@@ -641,6 +743,9 @@ MINDMAP_PROMPT = """아래는 '{topic}' 주제로 나눈 대화입니다. 각 �
 - 묶음마다 0~6개, 글에 실제로 있는 내용만, 중요한 순서대로. 같은 요점을 두 묶음에 중복해서 넣지 마세요.
 - label: 마인드맵 노드에 들어갈 15자 안팎의 짧은 핵심 어구. detail: 그 요점을 풀어 쓴 한 문장.
 - turn_ids: 그 요점이 나온 턴의 id (아래 <turn id="..."> 값). 여러 턴에 걸쳐 있으면 모두 적으세요.
+- uncertain: 사용자 생각의 한 요점과 AI 답의 한 요점이 겹치는지 아닌지 확신하기 어려운 경우, 그 쌍은 위 세 묶음 어디에도 넣지 말고 여기에 넣으세요.
+  mine_label·ai_label은 각 쪽 요점(15자 안팎), shared_label은 겹친다고 볼 때의 공통 요점,
+  question은 사용자에게 물을 한 문장 질문(예: "'작게 시작하기'와 'MVP부터 만들기'를 같은 생각으로 볼까요?"). 확실한 것만 있으면 빈 배열.
 
 {turns}"""
 
@@ -689,6 +794,12 @@ def demo_mindmap(turns):
             "label": short(t["question"], 14), "detail": f"'{t['question']}'에 대해 내 생각과 AI 답이 같은 방향이에요.",
             "kind": "same" if i % 2 == 0 else "similar", "turn_ids": [t["id"]],
         })
+    mm["uncertain"] = [{
+        "mine_label": short(turns[0]["my_thought"], 12), "ai_label": "목표를 먼저 분명히",
+        "shared_label": "방향을 먼저 정하기",
+        "question": "내 생각의 첫 요점과 AI의 '목표를 먼저 분명히'를 같은 생각으로 볼까요?",
+        "turn_ids": [turns[0]["id"]],
+    }]
     if len(turns) > 1:
         mm["shared"].append({
             "label": "기록하며 비교하기", "detail": "여러 턴에 걸쳐 근거를 남기자는 생각이 겹쳐요.",
@@ -698,15 +809,44 @@ def demo_mindmap(turns):
 
 
 def clean_mindmap(data, valid_ids):
-    """존재하지 않는 turn_id는 버리고, 근거 턴이 하나도 없는 요점은 뺀다."""
+    """AI가 만든 결과 정리: 존재하지 않는 turn_id는 버리고, 근거 턴이 하나도 없는 요점은 뺀다."""
     out = {}
-    for key in ("mine_only", "shared", "ai_only"):
+    for key in ("mine_only", "shared", "ai_only", "uncertain"):
         items = []
         for p in data.get(key, []):
             ids = [i for i in p.get("turn_ids", []) if i in valid_ids]
             if ids:
                 items.append({**p, "turn_ids": sorted(set(ids))})
         out[key] = items
+    return out
+
+
+def validate_user_mindmap(data, valid_ids):
+    """사용자가 고친 마인드맵 검사: 모양이 맞는지, 글자 수, 내 대화 ID만 쓰는지. 근거 대화 없이 직접 추가한 요점도 허용."""
+    if not isinstance(data, dict):
+        raise ValueError("마인드맵 형식이 올바르지 않아요.")
+    out = {}
+    for key in ("mine_only", "shared", "ai_only", "uncertain"):
+        items = data.get(key, [])
+        if not isinstance(items, list) or len(items) > 30:
+            raise ValueError("마인드맵 형식이 올바르지 않아요.")
+        clean = []
+        for p in items:
+            if not isinstance(p, dict):
+                raise ValueError("마인드맵 형식이 올바르지 않아요.")
+            ids = sorted({int(i) for i in p.get("turn_ids", []) if isinstance(i, int) and i in valid_ids})
+            if key == "uncertain":
+                item = {k: str(p.get(k, "")).strip()[:120] for k in ("mine_label", "ai_label", "shared_label", "question")}
+            else:
+                label = str(p.get("label", "")).strip()
+                if not label:
+                    raise ValueError("요점 이름이 비어 있어요.")
+                item = {"label": label[:40], "detail": str(p.get("detail", "")).strip()[:200]}
+                if key == "shared":
+                    item["kind"] = "similar" if p.get("kind") == "similar" else "same"
+            item["turn_ids"] = ids
+            clean.append(item)
+        out[key] = clean
     return out
 
 
@@ -727,8 +867,13 @@ def mindmap(topic_id):
     sig = turns_signature(turns)
     cached = json.loads(topic["mindmap"]) if topic["mindmap"] else None
     refresh = (request.json or {}).get("refresh")
-    if cached and cached.get("signature") == sig and not refresh:
-        return jsonify(cached)
+    if cached and not refresh:
+        cached.setdefault("uncertain", [])
+        if cached.get("signature") == sig:
+            return jsonify(cached)
+        if cached.get("edited"):
+            # 직접 고친 마인드맵은 대화가 늘어도 자동으로 덮어쓰지 않고, 다시 정리할지 사용자에게 맡긴다
+            return jsonify({**cached, "stale": True})
     if not DEMO and not os.environ.get("ANTHROPIC_API_KEY"):
         return jsonify(error="ANTHROPIC_API_KEY가 설정되지 않았어요. think-first/.env 파일을 확인해 주세요."), 500
     try:
@@ -741,6 +886,27 @@ def mindmap(topic_id):
         return jsonify(error=str(e) or "마인드맵을 만들지 못했어요."), 502
     data["signature"] = sig
     data["created_at"] = now()
+    data["edited"] = False
+    db.execute("UPDATE topics SET mindmap = ? WHERE id = ?", (json.dumps(data, ensure_ascii=False), topic_id))
+    db.commit()
+    return jsonify(data)
+
+
+@app.patch("/api/topics/<int:topic_id>/mindmap")
+@login_required
+def edit_mindmap(topic_id):
+    """사용자가 직접 고친 마인드맵을 저장한다 (AI 판단을 고치거나, 애매한 요점에 답한 결과)."""
+    db = get_db()
+    topic = own_topic(db, topic_id)
+    if not topic or not topic["mindmap"]:
+        return jsonify(error="마인드맵을 찾을 수 없어요."), 404
+    cached = json.loads(topic["mindmap"])
+    valid = {r["id"] for r in db.execute("SELECT id FROM turns WHERE topic_id = ?", (topic_id,))}
+    try:
+        data = validate_user_mindmap(request.json or {}, valid)
+    except (ValueError, TypeError) as e:
+        return jsonify(error=str(e)), 400
+    data.update(signature=cached.get("signature", []), created_at=cached.get("created_at"), edited=True, edited_at=now())
     db.execute("UPDATE topics SET mindmap = ? WHERE id = ?", (json.dumps(data, ensure_ascii=False), topic_id))
     db.commit()
     return jsonify(data)

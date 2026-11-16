@@ -54,7 +54,10 @@ TOPICS = [
         "mindmap": {
             "mine_only": [
                 {"label": "역량별로 다르게 구성", "detail": "프로젝트마다 전처리·모델링·시각화처럼 서로 다른 역량을 보여주자.", "turn_ids": [0]},
-                {"label": "실패한 시도도 기록", "detail": "잘 안 된 시도도 짧게 적어 판단 과정을 보여주자.", "turn_ids": [1]},
+            ],
+            "uncertain": [
+                {"mine_label": "실패한 시도도 기록", "ai_label": "회고 남기기", "shared_label": "과정을 돌아보는 기록",
+                 "question": "내 생각의 '실패한 시도도 기록'과 AI의 '회고 남기기'를 같은 생각으로 볼까요?", "turn_ids": [1]},
             ],
             "shared": [
                 {"label": "소수 프로젝트를 깊게", "detail": "개수보다 2~3개를 깊이 있게 보여주는 게 낫다.", "kind": "same", "turn_ids": [0]},
@@ -210,8 +213,8 @@ def main():
             ids.append(cur.lastrowid)
         # 마인드맵의 순서 번호 → 실제 turn id, 그리고 캐시가 유효하도록 signature를 맞춘다
         mm = {
-            key: [{**p, "turn_ids": [ids[i] for i in p["turn_ids"]]} for p in topic["mindmap"][key]]
-            for key in ("mine_only", "shared", "ai_only")
+            key: [{**p, "turn_ids": [ids[i] for i in p["turn_ids"]]} for p in topic["mindmap"].get(key, [])]
+            for key in ("mine_only", "shared", "ai_only", "uncertain")
         }
         mm["signature"] = ids
         mm["created_at"] = last

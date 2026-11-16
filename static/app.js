@@ -9,6 +9,8 @@ const cfg = { min_thought: 20, demo: false };
 const state = {
   q: "",              // 홈 검색어
   filter: "all",      // all | starred | in_progress | done
+  folder: "all",      // all | none(폴더 없음) | 폴더 id
+  folders: null,
   drafts: {},         // 주제별 작성 중인 질문/생각 (탭을 오가도 유지)
   user: undefined,    // 로그인한 사람 (undefined: 아직 모름, null: 로그인 안 함)
 };
@@ -111,7 +113,7 @@ const THOUGHT_PROMPTS = ["내가 생각하는 답은 …", "그렇게 생각하�
 function bindThought($t, $counter, onChange) {
   const update = () => {
     const n = $t.value.trim().length;
-    $counter.textContent = n >= cfg.min_thought ? `${n}자 · 준비됐어요` : `${n} / ${cfg.min_thought}자 이상`;
+    $counter.textContent = n >= cfg.min_thought ? `${n}자 · 이제 AI 답을 볼 수 있어요` : `${cfg.min_thought - n}자 더 쓰면 AI 답이 열려요`;
     $counter.classList.toggle("ok", n >= cfg.min_thought);
     onChange?.();
   };
@@ -148,6 +150,7 @@ async function viewHome() {
         <input type="search" id="search" placeholder="주제·질문·생각·답 검색" value="${esc(state.q)}">
         <a class="btn btn-primary" href="#/new">+ 새 주제</a>
       </div>
+      <div class="folders" id="folders"></div>
       <div class="filters" id="filters"></div>
       <ul class="topic-rows" id="topic-rows"></ul>
     </div>`;
@@ -163,20 +166,72 @@ async function viewHome() {
 }
 
 async function loadTopicRows() {
-  const all = await api(`/api/topics?${new URLSearchParams({ q: state.q })}`);
+  const [all, folders] = await Promise.all([
+    api(`/api/topics?${new URLSearchParams({ q: state.q })}`),
+    api("/api/folders"),
+  ]);
+  state.folders = folders;
   const $rows = document.getElementById("topic-rows");
   if (!$rows) return;
+  // 고른 폴더가 지워졌으면 전체로
+  if (typeof state.folder === "number" && !folders.some((f) => f.id === state.folder)) state.folder = "all";
+
+  const inFolder = all.filter((t) =>
+    state.folder === "all" ? true : state.folder === "none" ? t.folder_id == null : t.folder_id === state.folder);
   const counts = {
-    all: all.length,
-    starred: all.filter((t) => t.is_starred).length,
-    in_progress: all.filter((t) => t.status === "in_progress").length,
-    done: all.filter((t) => t.status === "done").length,
+    all: inFolder.length,
+    starred: inFolder.filter((t) => t.is_starred).length,
+    in_progress: inFolder.filter((t) => t.status === "in_progress").length,
+    done: inFolder.filter((t) => t.status === "done").length,
   };
   const pass = {
     all: () => true, starred: (t) => t.is_starred,
     in_progress: (t) => t.status === "in_progress", done: (t) => t.status === "done",
   }[state.filter];
-  const list = all.filter(pass);
+  const list = inFolder.filter(pass);
+  const folderName = Object.fromEntries(folders.map((f) => [f.id, f.name]));
+
+  // 폴더 줄: 전체 · 폴더 없음 · 폴더들 · + 새 폴더
+  const noneCount = all.filter((t) => t.folder_id == null).length;
+  const fchip = (key, label, n) =>
+    `<button class="folder-chip ${state.folder === key ? "active" : ""}" data-folder="${key}">${esc(label)} <span>${n}</span></button>`;
+  const cur = typeof state.folder === "number" ? folders.find((f) => f.id === state.folder) : null;
+  document.getElementById("folders").innerHTML = `
+    <div class="folder-list" role="tablist" aria-label="폴더">
+      ${fchip("all", "모든 주제", all.length)}
+      ${fchip("none", "폴더 없음", noneCount)}
+      ${folders.map((f) => fchip(f.id, f.name, all.filter((t) => t.folder_id === f.id).length)).join("")}
+      <button class="folder-add" id="folder-add">+ 새 폴더</button>
+    </div>
+    ${cur ? `<div class="folder-actions">
+      <span>폴더 <b>${esc(cur.name)}</b></span>
+      <button class="btn btn-ghost btn-sm" id="folder-rename">이름 바꾸기</button>
+      <button class="btn btn-ghost btn-sm danger" id="folder-delete">폴더 삭제</button>
+    </div>` : ""}`;
+  document.querySelectorAll("[data-folder]").forEach((b) => (b.onclick = () => {
+    const k = b.dataset.folder;
+    state.folder = k === "all" || k === "none" ? k : Number(k);
+    loadTopicRows();
+  }));
+  document.getElementById("folder-add").onclick = async () => {
+    const name = prompt("새 폴더 이름");
+    if (!name?.trim()) return;
+    try { const f = await api("/api/folders", { method: "POST", body: { name: name.trim() } }); state.folder = f.id; loadTopicRows(); }
+    catch (err) { toast(err.message); }
+  };
+  if (cur) {
+    document.getElementById("folder-rename").onclick = async () => {
+      const name = prompt("폴더 이름 바꾸기", cur.name);
+      if (!name?.trim() || name.trim() === cur.name) return;
+      try { await api(`/api/folders/${cur.id}`, { method: "PATCH", body: { name: name.trim() } }); loadTopicRows(); }
+      catch (err) { toast(err.message); }
+    };
+    document.getElementById("folder-delete").onclick = async () => {
+      if (!confirm(`'${cur.name}' 폴더를 지울까요? 안에 있던 주제는 지우지 않고 '폴더 없음'으로 옮겨요.`)) return;
+      try { await api(`/api/folders/${cur.id}`, { method: "DELETE" }); state.folder = "all"; loadTopicRows(); }
+      catch (err) { toast(err.message); }
+    };
+  }
 
   const chip = (k, label) => `<button class="filter ${state.filter === k ? "active" : ""}" data-f="${k}">${label} <span>${counts[k]}</span></button>`;
   document.getElementById("filters").innerHTML =
@@ -186,21 +241,28 @@ async function loadTopicRows() {
   if (!list.length) {
     $rows.innerHTML = `<li class="empty">${
       state.q ? "찾는 주제가 없어요."
-      : all.length ? { starred: "중요 표시한 주제가 없어요. ☆을 눌러 중요한 주제를 모아 보세요.", in_progress: "진행중인 주제가 없어요.", done: "아직 완료한 주제가 없어요." }[state.filter]
+      : inFolder.length ? { starred: "중요 표시한 주제가 없어요. ☆을 눌러 중요한 주제를 모아 보세요.", in_progress: "진행중인 주제가 없어요.", done: "아직 완료한 주제가 없어요." }[state.filter]
+      : all.length ? "이 폴더에는 아직 주제가 없어요.<br>주제 오른쪽의 폴더 메뉴로 옮기거나, 새 주제를 만들어 보세요."
       : "아직 주제가 없어요.<br>궁금한 게 생겼다면, AI에게 묻기 전에 내 생각부터 적어 보세요."}</li>`;
     return;
   }
+  const moveSelect = (t) => `
+    <select class="move" data-move="${t.id}" aria-label="${esc(t.name)} 폴더 옮기기" title="폴더 옮기기">
+      <option value="" ${t.folder_id == null ? "selected" : ""}>폴더 없음</option>
+      ${folders.map((f) => `<option value="${f.id}" ${t.folder_id === f.id ? "selected" : ""}>${esc(f.name)}</option>`).join("")}
+      <option value="__new">+ 새 폴더…</option>
+    </select>`;
   $rows.innerHTML = list.map((t) => `
     <li class="topic-row ${t.status}" data-id="${t.id}">
       ${starBtn(t.is_starred, t.name)}
       <a class="topic-link" href="#/topic/${t.id}">
         <div class="topic-main">
           <div class="topic-name">${esc(t.name)}</div>
-          <div class="topic-meta">대화 ${t.turn_count}개 · ${fmtDate(t.updated_at, false)}${t.last_question ? ` · ${esc(t.last_question)}` : ""}</div>
+          <div class="topic-meta">${state.folder === "all" && t.folder_id != null ? `<span class="meta-folder">${esc(folderName[t.folder_id] || "")}</span> · ` : ""}대화 ${t.turn_count}개 · ${fmtDate(t.updated_at, false)}${t.last_question ? ` · ${esc(t.last_question)}` : ""}</div>
         </div>
         ${statusBadge(t.status)}
-        <span class="chev" aria-hidden="true">→</span>
       </a>
+      ${moveSelect(t)}
     </li>`).join("");
 
   $rows.querySelectorAll("[data-star]").forEach((b) => {
@@ -211,56 +273,70 @@ async function loadTopicRows() {
       catch (err) { toast(err.message); }
     };
   });
+  $rows.querySelectorAll("[data-move]").forEach((sel) => {
+    sel.onchange = async () => {
+      let folderId = sel.value === "" ? null : sel.value;
+      try {
+        if (folderId === "__new") {
+          const name = prompt("새 폴더 이름");
+          if (!name?.trim()) { loadTopicRows(); return; }
+          folderId = (await api("/api/folders", { method: "POST", body: { name: name.trim() } })).id;
+        }
+        await api(`/api/topics/${sel.dataset.move}`, { method: "PATCH", body: { folder_id: folderId == null ? null : Number(folderId) } });
+        const fname = folderId == null ? "폴더 없음" : (state.folders.find((f) => f.id === Number(folderId))?.name || "새 폴더");
+        toast(`'${fname}'(으)로 옮겼어요`);
+        loadTopicRows();
+      } catch (err) { toast(err.message); loadTopicRows(); }
+    };
+  });
 }
 
-// ---------- 새 주제 ----------
-function viewNewTopic() {
+// ---------- 새 주제: 이름만 정하고 바로 대화 화면으로 ----------
+async function viewNewTopic() {
+  const folders = state.folders || (await api("/api/folders").catch(() => []));
+  const preset = typeof state.folder === "number" ? state.folder : "";
   $app.innerHTML = `
     <div class="narrow">
       <a class="back" href="#/">← 주제 목록</a>
       <h1 class="page-title">새 주제</h1>
-      <p class="page-sub">AI의 답을 보기 전에, 내 생각을 먼저 붙잡아 두세요.</p>
-
-      <section class="step">
-        <div class="step-label"><span class="step-num">01</span> 주제 이름</div>
-        <input type="text" id="topic-name" maxlength="40" placeholder="예: 데이터 분석 포트폴리오, 공부법">
-      </section>
-      <section class="step locked" id="step2">
-        <div class="step-label"><span class="step-num">02</span> 무엇이 궁금한가요?</div>
-        <textarea id="question" placeholder="AI에게 물어보고 싶은 첫 질문을 적어 주세요."></textarea>
-      </section>
-      <section class="step locked" id="step3">
-        <div class="step-label"><span class="step-num">03</span> 내 생각을 먼저 적어 보세요</div>
-        <p class="hint">정답이 아니어도 괜찮아요. 지금 떠오르는 생각, 근거, 헷갈리는 점을 적어 두면 AI 답을 본 뒤에도 내 생각을 잃지 않아요.</p>
-        ${promptButtons()}
-        <textarea id="thought" class="thought" placeholder="내 생각은…"></textarea>
-        <div class="actions">
-          <span class="counter" id="counter"></span>
-          <button class="btn btn-primary" id="submit" disabled>주제 만들고 AI 답 보기 →</button>
-        </div>
-      </section>
+      <p class="page-sub">무엇에 대해 생각해 볼지 이름만 정하면, 바로 대화 화면으로 넘어가요.</p>
+      <form id="new-topic" class="new-topic" novalidate>
+        <label class="fld" for="topic-name">
+          <span class="fld-label">주제 이름</span>
+          <input type="text" id="topic-name" aria-label="주제 이름" maxlength="40" placeholder="예: 데이터 분석 포트폴리오, 공부법" autocomplete="off">
+        </label>
+        <label class="fld" for="topic-folder">
+          <span class="fld-label">폴더 <small>(선택)</small></span>
+          <select id="topic-folder" aria-label="폴더">
+            <option value="">폴더 없음</option>
+            ${folders.map((f) => `<option value="${f.id}" ${preset === f.id ? "selected" : ""}>${esc(f.name)}</option>`).join("")}
+          </select>
+        </label>
+        <p class="form-err" id="form-err" role="alert"></p>
+        <button class="btn btn-primary" type="submit" id="submit" disabled>만들고 대화 시작 →</button>
+      </form>
+      <ol class="flow-preview" aria-label="다음에 할 일">
+        <li><span class="step-num">01</span> 질문을 적어요</li>
+        <li><span class="step-num">02</span> 내 생각을 ${cfg.min_thought}자 이상 먼저 써요</li>
+        <li><span class="step-num">03</span> AI 답을 보고 비교해요</li>
+      </ol>
     </div>`;
-
+  const $f = document.getElementById("new-topic");
   const $name = document.getElementById("topic-name");
-  const $q = document.getElementById("question");
-  const $t = document.getElementById("thought");
   const $submit = document.getElementById("submit");
-  const update = () => {
-    document.getElementById("step2").classList.toggle("locked", !$name.value.trim());
-    document.getElementById("step3").classList.toggle("locked", !($name.value.trim() && $q.value.trim()));
-    $submit.disabled = !($name.value.trim() && $q.value.trim() && $t.value.trim().length >= cfg.min_thought);
-  };
-  $name.oninput = update;
-  $q.oninput = update;
-  bindThought($t, document.getElementById("counter"), update);
-
-  $submit.onclick = async () => {
+  $name.oninput = () => { $submit.disabled = !$name.value.trim(); document.getElementById("form-err").textContent = ""; };
+  $f.onsubmit = async (e) => {
+    e.preventDefault();
+    if (!$name.value.trim()) return;
     $submit.disabled = true;
     try {
-      const { id } = await api("/api/topics", { method: "POST", body: { name: $name.value.trim() } });
-      const turn = await api(`/api/topics/${id}/turns`, { method: "POST", body: { question: $q.value.trim(), my_thought: $t.value.trim() } });
-      location.hash = `#/topic/${id}?ask=${turn.id}`;
-    } catch (err) { toast(err.message); $submit.disabled = false; }
+      const folder = document.getElementById("topic-folder").value;
+      const { id } = await api("/api/topics", { method: "POST", body: { name: $name.value.trim(), folder_id: folder ? Number(folder) : null } });
+      location.hash = `#/topic/${id}`;
+    } catch (err) {
+      document.getElementById("form-err").textContent = err.message;
+      $submit.disabled = false;
+    }
   };
   $name.focus();
 }
@@ -360,7 +436,16 @@ function turnHTML(t, n) {
 function renderChatTab($panel, topic, turns, opts) {
   $panel.innerHTML = `
     <div class="chat">
-      <div id="turns">${turns.length ? turns.map((t, i) => turnHTML(t, i + 1)).join("") : `<div class="empty">아직 대화가 없어요. 아래에서 첫 질문을 시작해 보세요.</div>`}</div>
+      <div id="turns">${turns.length ? turns.map((t, i) => turnHTML(t, i + 1)).join("") : `
+        <div class="chat-start">
+          <h2>'${esc(topic.name)}'에 대해 무엇이 궁금한가요?</h2>
+          <p>아래 입력창에 첫 질문을 적어 주세요. 이렇게 진행돼요.</p>
+          <ol class="flow-preview">
+            <li><span class="step-num">01</span> 질문을 적어요</li>
+            <li><span class="step-num">02</span> AI에게 보내기 전에 내 생각을 ${cfg.min_thought}자 이상 써요</li>
+            <li><span class="step-num">03</span> AI 답을 보고, 내 생각과 비교해 메모해요</li>
+          </ol>
+        </div>`}</div>
       <div class="composer" id="composer"></div>
     </div>`;
 
@@ -376,6 +461,7 @@ function renderChatTab($panel, topic, turns, opts) {
     }
   }
   if (opts.turn) jumpToTurn(opts.turn);
+  else if (!turns.length) document.getElementById("c-question")?.focus();
   else window.scrollTo(0, document.body.scrollHeight);
 }
 
@@ -470,6 +556,13 @@ async function streamAnswer(t) {
 }
 
 // 입력창: ① 질문 → ② 내 생각(20자 이상) → AI 답 보기
+// 입력창 위의 단계 표시: ① 질문 → ② 내 생각 → ③ AI 답
+const composerSteps = (cur) => `
+  <ol class="c-steps" aria-label="진행 단계">
+    ${["질문", "내 생각", "AI 답"].map((label, i) =>
+      `<li class="${i + 1 === cur ? "now" : i + 1 < cur ? "done" : ""}" ${i + 1 === cur ? 'aria-current="step"' : ""}><span>${i + 1}</span>${label}</li>`).join("")}
+  </ol>`;
+
 function renderComposer(topic, turns) {
   const $c = document.getElementById("composer");
   const draft = (state.drafts[topic.id] ||= { step: 1, question: "", thought: "" });
@@ -477,15 +570,19 @@ function renderComposer(topic, turns) {
   if (draft.step === 1) {
     $c.innerHTML = `
       <div class="composer-box">
-        <textarea id="c-question" rows="2" placeholder="${turns.length ? "이어서 물어볼 질문을 적어 주세요" : "첫 질문을 적어 주세요"}">${esc(draft.question)}</textarea>
+        ${composerSteps(1)}
+        <textarea id="c-question" rows="2" aria-label="질문" placeholder="${turns.length ? "이어서 물어볼 질문을 적어 주세요" : "첫 질문을 적어 주세요"}">${esc(draft.question)}</textarea>
         <div class="actions" style="margin-top:4px">
-          <span class="counter composer-hint">질문을 적은 뒤, AI에게 보내기 전에 내 생각을 먼저 적어요</span><span></span>
+          <span class="counter" id="c-qhint">${draft.question.trim() ? "Enter를 누르면 다음 단계로 가요" : "질문을 적으면 다음 단계로 넘어갈 수 있어요"}</span>
           <button class="btn btn-primary btn-sm" id="c-next" ${draft.question.trim() ? "" : "disabled"}>다음: 내 생각 적기 →</button>
         </div>
       </div>`;
     const $q = document.getElementById("c-question");
     const $next = document.getElementById("c-next");
-    $q.oninput = () => { draft.question = $q.value; $next.disabled = !$q.value.trim(); };
+    $q.oninput = () => {
+      draft.question = $q.value; $next.disabled = !$q.value.trim();
+      document.getElementById("c-qhint").textContent = $q.value.trim() ? "Enter를 누르면 다음 단계로 가요" : "질문을 적으면 다음 단계로 넘어갈 수 있어요";
+    };
     $q.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing && $q.value.trim()) { e.preventDefault(); $next.click(); } };
     $next.onclick = () => { draft.step = 2; renderComposer(topic, turns); document.getElementById("c-thought").focus(); };
     return;
@@ -493,10 +590,11 @@ function renderComposer(topic, turns) {
 
   $c.innerHTML = `
     <div class="composer-box">
-      <div class="composer-q">Q. ${esc(draft.question)}</div>
-      <div class="composer-label">내 생각을 먼저 적어 보세요</div>
+      ${composerSteps(2)}
+      <div class="composer-q">${esc(draft.question)}</div>
+      <div class="composer-label">AI에게 보내기 전에, 내 생각을 먼저 적어 보세요 <small>(AI에게는 보내지 않아요)</small></div>
       ${promptButtons()}
-      <textarea id="c-thought" class="thought" placeholder="내 생각은…">${esc(draft.thought)}</textarea>
+      <textarea id="c-thought" class="thought" aria-label="내 생각" placeholder="내 생각은…">${esc(draft.thought)}</textarea>
       <div class="actions">
         <button class="btn btn-ghost btn-sm" id="c-back">← 질문 고치기</button>
         <div style="display:flex;gap:10px;align-items:center">
@@ -552,20 +650,29 @@ function jumpToTurn(turnId) {
 }
 
 // ---------- 마인드맵 탭 ----------
+const MM_KEYS = { mine: "mine_only", shared: "shared", ai: "ai_only" };
+const AREAS = { mine: "내 생각", shared: "겹치는 생각", ai: "AI 생각" };
+
 async function renderMapTab($panel, topic, turns, refresh = false) {
-  const turnNo = Object.fromEntries(turns.map((t, i) => [t.id, i + 1]));
   $panel.innerHTML = `
     <div class="map-page">
       <div class="map-bar">
         <p id="map-summary">내 생각과 AI 답의 핵심을 모아, 겹치는 생각은 가운데로 모았어요.</p>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <div class="map-tools">
           <span class="legend"><i></i>같은 생각 <i class="similar"></i>비슷한 생각</span>
+          <button class="btn btn-sm" id="map-edit" aria-pressed="false" hidden>직접 고치기</button>
           <button class="btn btn-sm" id="map-refresh">다시 정리</button>
         </div>
       </div>
+      <div id="map-notice"></div>
+      <div id="map-ask"></div>
       <div id="map-area"><div class="map-loading">대화 전체에서 내 생각과 AI 답의 핵심을 정리하는 중…</div></div>
     </div>`;
-  document.getElementById("map-refresh").onclick = () => renderMapTab($panel, topic, turns, true);
+  const ctx = { topic, turns, data: null, editing: false, turnNo: Object.fromEntries(turns.map((t, i) => [t.id, i + 1])) };
+  document.getElementById("map-refresh").onclick = () => {
+    if (ctx.data?.edited && !confirm("다시 정리하면 AI가 처음부터 다시 만들어서, 직접 고친 내용은 사라져요. 계속할까요?")) return;
+    renderMapTab($panel, topic, turns, true);
+  };
 
   const $area = document.getElementById("map-area");
   let data;
@@ -577,21 +684,99 @@ async function renderMapTab($panel, topic, turns, refresh = false) {
     document.getElementById("map-refresh").hidden = true;
     return;
   }
+  ctx.data = data;
+  const $edit = document.getElementById("map-edit");
+  $edit.hidden = false;
+  $edit.onclick = () => {
+    ctx.editing = !ctx.editing;
+    $edit.setAttribute("aria-pressed", String(ctx.editing));
+    $edit.textContent = ctx.editing ? "고치기 끝내기" : "직접 고치기";
+    paintMap(ctx);
+  };
+  paintMap(ctx);
+}
 
-  const { mine_only: mine, shared, ai_only: ai } = data;
+// 고친 마인드맵 저장 → 다시 그리기
+async function saveMap(ctx, next) {
+  try {
+    ctx.data = await api(`/api/topics/${ctx.topic.id}/mindmap`, {
+      method: "PATCH",
+      body: { mine_only: next.mine_only, shared: next.shared, ai_only: next.ai_only, uncertain: next.uncertain || [] },
+    });
+    paintMap(ctx);
+    return true;
+  } catch (err) { toast(err.message); return false; }
+}
+const cloneMap = (d) => JSON.parse(JSON.stringify({ mine_only: d.mine_only, shared: d.shared, ai_only: d.ai_only, uncertain: d.uncertain || [] }));
+
+function paintMap(ctx) {
+  const { topic, turns, data, turnNo } = ctx;
+  const mine = data.mine_only, shared = data.shared, ai = data.ai_only, uncertain = data.uncertain || [];
   document.getElementById("map-summary").textContent =
-    `겹치는 생각 ${shared.length}개 · 나만의 관점 ${mine.length}개 · AI의 새로운 관점 ${ai.length}개 — 요점을 누르면 그 대화로 이동해요`;
+    `겹치는 생각 ${shared.length}개 · 나만의 관점 ${mine.length}개 · AI의 새로운 관점 ${ai.length}개` +
+    (ctx.editing ? " — 요점을 누르면 고칠 수 있어요" : " — 요점을 누르면 그 대화로 이동해요");
 
-  const AREAS = { mine: "내 생각", shared: "겹치는 생각", ai: "AI 생각" };
+  // AI 판단에 대한 안내 (+ 직접 고친 상태, 대화가 늘어난 상태)
+  document.getElementById("map-notice").innerHTML = `
+    <div class="map-note">
+      <b>AI가 정리한 결과예요.</b> 특히 '겹치는 생각'은 AI가 잘못 판단했을 수 있어요. 다르면 <b>직접 고치기</b>로 바로잡아 주세요.
+      ${data.edited ? `<span class="edited-tag">직접 고친 마인드맵</span>` : ""}
+    </div>
+    ${data.stale ? `<div class="map-note warn">대화가 새로 늘었어요. <b>다시 정리</b>하면 새 대화가 반영되지만, 직접 고친 내용은 사라져요.</div>` : ""}`;
+
+  // AI가 애매하다고 한 요점: 사용자에게 묻기
+  const $ask = document.getElementById("map-ask");
+  $ask.innerHTML = uncertain.length ? `
+    <section class="map-ask" aria-label="확인이 필요한 요점">
+      <h3>AI가 판단하기 애매한 요점이 ${uncertain.length}개 있어요 <small>직접 정해 주세요</small></h3>
+      ${uncertain.map((u, i) => `
+        <div class="ask-item">
+          <p class="ask-q">${esc(u.question)}</p>
+          <div class="ask-pair">
+            <span class="ask-side mine">${esc(u.mine_label)}</span><span class="ask-vs">와</span>
+            <span class="ask-side ai">${esc(u.ai_label)}</span>
+            ${u.turn_ids.map((tid) => `<button class="turn-chip" data-jump="${tid}">대화 ${turnNo[tid] ?? "?"}</button>`).join("")}
+          </div>
+          <div class="ask-btns">
+            <button class="btn btn-sm" data-resolve="same" data-i="${i}">같은 생각</button>
+            <button class="btn btn-sm" data-resolve="similar" data-i="${i}">비슷한 생각</button>
+            <button class="btn btn-sm" data-resolve="different" data-i="${i}">다른 생각</button>
+          </div>
+        </div>`).join("")}
+    </section>` : "";
+  $ask.onclick = async (e) => {
+    const jump = e.target.closest("[data-jump]");
+    if (jump) { location.hash = `#/topic/${topic.id}?turn=${jump.dataset.jump}`; return; }
+    const b = e.target.closest("[data-resolve]");
+    if (!b) return;
+    const next = cloneMap(data);
+    const [u] = next.uncertain.splice(Number(b.dataset.i), 1);
+    if (b.dataset.resolve === "different") {
+      // 서로 다른 생각 → 각자의 영역에 둔다
+      if (!next.mine_only.some((p) => p.label === u.mine_label)) next.mine_only.push({ label: u.mine_label, detail: "", turn_ids: u.turn_ids });
+      if (!next.ai_only.some((p) => p.label === u.ai_label)) next.ai_only.push({ label: u.ai_label, detail: "", turn_ids: u.turn_ids });
+    } else {
+      // 같은·비슷한 생각 → 가운데로 모은다
+      next.mine_only = next.mine_only.filter((p) => p.label !== u.mine_label);
+      next.ai_only = next.ai_only.filter((p) => p.label !== u.ai_label);
+      next.shared.push({
+        label: u.shared_label || u.mine_label, kind: b.dataset.resolve,
+        detail: `내 생각 '${u.mine_label}'과 AI의 '${u.ai_label}'를 ${b.dataset.resolve === "same" ? "같은" : "비슷한"} 생각으로 정리했어요.`,
+        turn_ids: u.turn_ids,
+      });
+    }
+    if (await saveMap(ctx, next)) toast("마인드맵에 반영했어요");
+  };
+
   const items = { mine, shared, ai };
   const usedTurns = turns.filter((t) => [...mine, ...shared, ...ai].some((p) => p.turn_ids.includes(t.id)));
   const view = loadMapView(topic.id);
 
   const node = (side, p, i) => `
-    <button class="node ${side} ${p.kind || ""}" data-side="${side}" data-i="${i}" data-turn="${p.turn_ids[0]}" data-turns="${p.turn_ids.join(",")}">
-      <span class="node-label">${esc(p.label)}${side === "shared" ? `<span class="node-kind">${p.kind === "same" ? "같음" : "비슷함"}</span>` : ""}</span>
-      <span class="node-detail">${esc(p.detail)}</span>
-      <span class="node-turns">${p.turn_ids.map((tid) => `<span class="turn-chip" data-turn="${tid}">대화 ${turnNo[tid] ?? "?"}</span>`).join("")}</span>
+    <button class="node ${side} ${p.kind || ""}" data-side="${side}" data-i="${i}" ${p.turn_ids.length ? `data-turn="${p.turn_ids[0]}"` : ""} data-turns="${p.turn_ids.join(",")}">
+      <span class="node-label">${esc(p.label)}${side === "shared" ? `<span class="node-kind">${p.kind === "similar" ? "비슷함" : "같음"}</span>` : ""}</span>
+      ${p.detail ? `<span class="node-detail">${esc(p.detail)}</span>` : ""}
+      ${p.turn_ids.length ? `<span class="node-turns">${p.turn_ids.map((tid) => `<span class="turn-chip" data-turn="${tid}">대화 ${turnNo[tid] ?? "?"}</span>`).join("")}</span>` : `<span class="node-turns"><span class="turn-chip muted">직접 추가</span></span>`}
     </button>`;
   const column = (side) => `
     <div class="cmap-col ${side}" data-area="${side}">
@@ -600,9 +785,10 @@ async function renderMapTab($panel, topic, turns, refresh = false) {
       </button>
       ${items[side].map((p, i) => node(side, p, i)).join("")}
       <div class="cmap-empty-col ${side}" data-empty></div>
+      ${ctx.editing ? `<button class="node-add" data-add="${side}">+ 요점 추가</button>` : ""}
     </div>`;
 
-  $area.innerHTML = `
+  document.getElementById("map-area").innerHTML = `
     <div class="map-view" id="map-view">
       <div class="mv-group">
         <span class="mv-label">보기</span>
@@ -616,7 +802,7 @@ async function renderMapTab($panel, topic, turns, refresh = false) {
       </div>` : ""}
       <button class="mv-chip mv-compact" id="mv-compact" aria-pressed="false"></button>
     </div>
-    <div class="cmap" id="cmap">
+    <div class="cmap ${ctx.editing ? "editing" : ""}" id="cmap">
       <svg class="cmap-lines" aria-hidden="true"></svg>
       <div class="cmap-grid">${column("mine")}${column("shared")}${column("ai")}</div>
     </div>`;
@@ -632,17 +818,19 @@ async function renderMapTab($panel, topic, turns, refresh = false) {
       const collapsed = view.hidden.includes(side);
       let visible = 0;
       $col.querySelectorAll(".node").forEach((n) => {
-        const show = !collapsed && turnOk(n);
+        const show = !collapsed && (ctx.editing || turnOk(n));
         n.hidden = !show;
         if (show) visible++;
       });
       const total = items[side].length;
-      const matched = [...$col.querySelectorAll(".node")].filter(turnOk).length;
+      const matched = [...$col.querySelectorAll(".node")].filter((n) => ctx.editing || turnOk(n)).length;
       $col.classList.toggle("collapsed", collapsed);
       $col.querySelector(".head-count").textContent = matched;
       $col.querySelector(".caret").textContent = collapsed ? "▸" : "▾";
       $col.querySelector("[data-toggle-area]").setAttribute("aria-expanded", String(!collapsed));
       $col.querySelector("[data-toggle-area]").title = collapsed ? "눌러서 펼치기" : "눌러서 접기";
+      const $add = $col.querySelector("[data-add]");
+      if ($add) $add.hidden = collapsed;
       const $empty = $col.querySelector("[data-empty]");
       $empty.textContent = collapsed ? `접어 둠 · ${matched}개`
         : visible ? ""
@@ -650,20 +838,20 @@ async function renderMapTab($panel, topic, turns, refresh = false) {
         : { mine: "나만의 관점이 없어요", shared: "겹치는 생각이 없어요", ai: "AI만의 관점이 없어요" }[side];
       $empty.hidden = !$empty.textContent;
       $grid.style.setProperty(`--c-${side}`, collapsed ? "max-content" : side === "shared" ? "minmax(0, 1.05fr)" : "minmax(0, 1fr)");
-      const chip = document.querySelector(`[data-area-chip="${side}"]`);
-      chip.setAttribute("aria-pressed", String(!collapsed));
+      document.querySelector(`[data-area-chip="${side}"]`).setAttribute("aria-pressed", String(!collapsed));
     }
     document.querySelectorAll("[data-turn-chip]").forEach((c) => {
       const on = c.dataset.turnChip === "all" ? !view.turns : !!view.turns?.includes(Number(c.dataset.turnChip));
       c.setAttribute("aria-pressed", String(on));
     });
-    $map.classList.toggle("compact", view.compact);
+    $map.classList.toggle("compact", view.compact && !ctx.editing);
     const $compact = document.getElementById("mv-compact");
     $compact.setAttribute("aria-pressed", String(view.compact));
     $compact.textContent = view.compact ? "요약 펼치기" : "요약 접기";
     saveMapView(topic.id, view);
     drawMapLines($map);
   };
+  ctx.apply = apply;
 
   const toggleArea = (side) => {
     view.hidden = view.hidden.includes(side) ? view.hidden.filter((s) => s !== side) : [...view.hidden, side];
@@ -689,9 +877,18 @@ async function renderMapTab($panel, topic, turns, refresh = false) {
   });
 
   $map.addEventListener("click", (e) => {
+    if (e.target.closest(".node-editor")) return;
     // 영역 머리를 누르면 그 영역을 접고 펼친다
     const head = e.target.closest("[data-toggle-area]");
     if (head) { toggleArea(head.dataset.toggleArea); return; }
+    if (ctx.editing) {
+      // 고치기 모드: 요점을 누르면 편집, '+ 요점 추가'로 새 요점
+      const add = e.target.closest("[data-add]");
+      if (add) { openNodeEditor(ctx, add, add.dataset.add, -1); return; }
+      const n = e.target.closest(".node");
+      if (n) openNodeEditor(ctx, n, n.dataset.side, Number(n.dataset.i));
+      return;
+    }
     // 요점(또는 대화 칩)을 누르면 대화 탭으로 가서 그 대화 위치로 이동
     const target = e.target.closest("[data-turn]");
     if (!target) return;
@@ -708,6 +905,68 @@ async function renderMapTab($panel, topic, turns, refresh = false) {
   if (resizeObs) resizeObs.disconnect();
   resizeObs = new ResizeObserver(() => drawMapLines($map));
   resizeObs.observe($map);
+}
+
+// 요점 하나를 고치는 칸: 이름·설명·영역(내 생각만/겹치는 생각/AI만)·같음/비슷함, 삭제
+function openNodeEditor(ctx, $anchor, side, index) {
+  document.querySelectorAll(".node-editor").forEach((f) => f.remove());
+  document.querySelectorAll(".node.editing-hidden").forEach((n) => n.classList.remove("editing-hidden"));
+  const isNew = index < 0;
+  const p = isNew ? { label: "", detail: "", kind: "same", turn_ids: [] } : ctx.data[MM_KEYS[side]][index];
+  const form = document.createElement("form");
+  form.className = `node-editor ${side}`;
+  form.innerHTML = `
+    <label class="ed-fld"><span>요점</span><input name="label" maxlength="40" value="${esc(p.label)}" placeholder="짧은 핵심어" aria-label="요점"></label>
+    <label class="ed-fld"><span>설명</span><textarea name="detail" maxlength="200" rows="2" placeholder="한 문장 설명 (선택)" aria-label="설명">${esc(p.detail || "")}</textarea></label>
+    <div class="ed-row">
+      <label class="ed-fld"><span>어디에 둘까요</span>
+        <select name="area" aria-label="영역">
+          <option value="mine" ${side === "mine" ? "selected" : ""}>내 생각에만 있음</option>
+          <option value="shared" ${side === "shared" ? "selected" : ""}>겹치는 생각</option>
+          <option value="ai" ${side === "ai" ? "selected" : ""}>AI 생각에만 있음</option>
+        </select>
+      </label>
+      <fieldset class="ed-kind" ${side === "shared" ? "" : "hidden"}>
+        <legend>얼마나 겹치나요</legend>
+        <label><input type="radio" name="kind" value="same" ${p.kind !== "similar" ? "checked" : ""}> 같음</label>
+        <label><input type="radio" name="kind" value="similar" ${p.kind === "similar" ? "checked" : ""}> 비슷함</label>
+      </fieldset>
+    </div>
+    <p class="form-err" role="alert"></p>
+    <div class="ed-btns">
+      ${isNew ? "" : `<button type="button" class="btn btn-ghost btn-sm danger" data-ed="delete">삭제</button>`}
+      <span></span>
+      <button type="button" class="btn btn-ghost btn-sm" data-ed="cancel">취소</button>
+      <button type="submit" class="btn btn-primary btn-sm">저장</button>
+    </div>`;
+  if (isNew) $anchor.before(form);
+  else { $anchor.classList.add("editing-hidden"); $anchor.after(form); }
+  form.area.onchange = () => { form.querySelector(".ed-kind").hidden = form.area.value !== "shared"; };
+  form.querySelector('[data-ed="cancel"]').onclick = () => { form.remove(); $anchor.classList.remove("editing-hidden"); ctx.apply?.(); };
+  const del = form.querySelector('[data-ed="delete"]');
+  if (del) del.onclick = async () => {
+    if (!confirm(`'${p.label}' 요점을 지울까요?`)) return;
+    const next = cloneMap(ctx.data);
+    next[MM_KEYS[side]].splice(index, 1);
+    if (await saveMap(ctx, next)) toast("요점을 지웠어요");
+  };
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const label = form.label.value.trim();
+    if (!label) { form.querySelector(".form-err").textContent = "요점 이름을 적어 주세요."; form.label.focus(); return; }
+    const area = form.area.value;
+    const item = { label, detail: form.detail.value.trim(), turn_ids: p.turn_ids || [] };
+    if (area === "shared") item.kind = form.kind.value;
+    const next = cloneMap(ctx.data);
+    if (!isNew && area === side) next[MM_KEYS[side]][index] = item;
+    else {
+      if (!isNew) next[MM_KEYS[side]].splice(index, 1);
+      next[MM_KEYS[area]].push(item);
+    }
+    if (await saveMap(ctx, next)) toast(isNew ? "요점을 추가했어요" : "고쳤어요");
+  };
+  form.label.focus();
+  drawMapLines(document.getElementById("cmap"));
 }
 
 // 마인드맵 보기 설정은 주제마다 이 브라우저에 기억해 둔다 (없거나 못 읽어도 기본값으로 동작)
@@ -737,12 +996,12 @@ function drawMapLines($map) {
   let d = "";
 
   // 내 생각 → 나만의 관점 (왼쪽 가장자리를 따라 내려가는 가지)
-  $map.querySelectorAll(".node.mine:not([hidden])").forEach((n) => {
+  $map.querySelectorAll(".node.mine:not([hidden]):not(.editing-hidden)").forEach((n) => {
     const b = box(n), x = hm.l + 14;
     d += `<path class="b-mine" d="M${x},${hm.b} C${x},${b.cy} ${x},${b.cy} ${b.l},${b.cy}"/>`;
   });
   // AI 생각 → AI만의 관점 (오른쪽 가장자리)
-  $map.querySelectorAll(".node.ai:not([hidden])").forEach((n) => {
+  $map.querySelectorAll(".node.ai:not([hidden]):not(.editing-hidden)").forEach((n) => {
     const b = box(n), x = ha.r - 14;
     d += `<path class="b-ai" d="M${x},${ha.b} C${x},${b.cy} ${x},${b.cy} ${b.r},${b.cy}"/>`;
   });
@@ -752,7 +1011,7 @@ function drawMapLines($map) {
   const colShared = box($map.querySelector(".cmap-col.shared"));
   const colAi = box($map.querySelector(".cmap-col.ai"));
   const gl = (colMine.r + colShared.l) / 2, gr = (colShared.r + colAi.l) / 2, rr = 12;
-  $map.querySelectorAll(".node.shared:not([hidden])").forEach((n) => {
+  $map.querySelectorAll(".node.shared:not([hidden]):not(.editing-hidden)").forEach((n) => {
     const b = box(n), kind = n.classList.contains("similar") ? "similar" : "same", i = n.dataset.i;
     d += `<path class="b-shared ${kind}" data-shared="${i}" d="M${hm.r},${hm.cy} L${gl - rr},${hm.cy} Q${gl},${hm.cy} ${gl},${hm.cy + rr} L${gl},${b.cy - rr} Q${gl},${b.cy} ${gl + rr},${b.cy} L${b.l},${b.cy}"/>`;
     d += `<path class="b-shared ${kind}" data-shared="${i}" d="M${ha.l},${ha.cy} L${gr + rr},${ha.cy} Q${gr},${ha.cy} ${gr},${ha.cy + rr} L${gr},${b.cy - rr} Q${gr},${b.cy} ${gr - rr},${b.cy} L${b.r},${b.cy}"/>`;
@@ -959,7 +1218,7 @@ async function route() {
   if (path === "/login") return viewLogin();
   if (path === "/signup") return viewSignup();
   let m;
-  if (path === "/new") viewNewTopic();
+  if (path === "/new") await viewNewTopic();
   else if ((m = path.match(/^\/topic\/(\d+)\/map$/))) { window.scrollTo(0, 0); await viewTopic(Number(m[1]), "map"); }
   else if ((m = path.match(/^\/topic\/(\d+)$/))) {
     const opts = { turn: Number(qs.get("turn")) || null, ask: Number(qs.get("ask")) || null };
