@@ -20,6 +20,7 @@ from functools import wraps
 from pathlib import Path
 
 import anthropic
+from example_topic import insert_topic, make_example
 from dotenv import load_dotenv
 from flask import Flask, Response, g, jsonify, request, send_file, send_from_directory, session
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -478,6 +479,8 @@ def signup():
     if first_user:
         # 회원 기능이 생기기 전에 혼자 쓰던 기록은 첫 번째 가입자의 것으로 옮긴다
         db.execute("UPDATE topics SET user_id = ? WHERE user_id IS NULL", (uid,))
+    # 어떻게 쓰는 앱인지 바로 보이도록 예시 주제 1개를 넣어 준다 (마인드맵까지 미리 정리돼 있어 AI를 부르지 않음)
+    insert_topic(db, uid, make_example())
     db.commit()
     session.clear()
     session.permanent = True
