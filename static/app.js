@@ -43,15 +43,29 @@ function toast(msg) {
 }
 
 const statusBadge = (s) =>
-  s === "done" ? `<span class="status done">✓ 완료</span>` : `<span class="status in_progress">● 진행중</span>`;
+  s === "done" ? `<span class="status done"><i></i>완료</span>` : `<span class="status in_progress"><i></i>진행중</span>`;
 
 function paintStatusToggle($btn, s) {
   $btn.dataset.status = s;
   $btn.className = `status status-toggle ${s}`;
-  $btn.innerHTML = s === "done" ? "✓ 완료" : "● 진행중";
+  $btn.innerHTML = s === "done" ? "<i></i>완료" : "<i></i>진행중";
   $btn.title = s === "done" ? "누르면 다시 진행중으로 바뀌어요" : "누르면 완료로 바뀌어요";
   $btn.setAttribute("aria-label", s === "done" ? "완료 상태. 눌러서 진행중으로 바꾸기" : "진행중 상태. 눌러서 완료로 바꾸기");
 }
+
+// 테마: 기본은 어두운 화면. 고른 값은 이 브라우저에 기억한다
+const currentTheme = () => document.documentElement.dataset.theme === "light" ? "light" : "dark";
+const themeToggle = () =>
+  `<button class="theme-toggle" data-theme-toggle title="화면 밝기 바꾸기">${currentTheme() === "dark" ? "밝게" : "어둡게"}</button>`;
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("[data-theme-toggle]")) return;
+  const next = currentTheme() === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("tf-theme", next); } catch { /* 기억 못 해도 괜찮음 */ }
+  document.querySelectorAll("[data-theme-toggle]").forEach((b) => (b.textContent = next === "dark" ? "밝게" : "어둡게"));
+  const $map = document.getElementById("cmap");
+  if ($map) drawMapLines($map);
+});
 
 const starBtn = (on, label) =>
   `<button class="star ${on ? "on" : ""}" data-star aria-pressed="${on ? "true" : "false"}" title="${on ? "중요 표시 해제" : "중요 표시"}" aria-label="${esc(label)} 중요 표시">${on ? "★" : "☆"}</button>`;
@@ -112,6 +126,7 @@ async function viewHome() {
   const mascot = document.getElementById("mascot-template").innerHTML;
   $app.innerHTML = `
     <div class="home">
+      <div class="home-top">${themeToggle()}</div>
       <header class="home-hero">
         <div class="mascot">${mascot}</div>
         <h1>주제</h1>
@@ -170,7 +185,7 @@ async function loadTopicRows() {
           <div class="topic-meta">대화 ${t.turn_count}개 · ${fmtDate(t.updated_at, false)}${t.last_question ? ` · ${esc(t.last_question)}` : ""}</div>
         </div>
         ${statusBadge(t.status)}
-        <span class="chev">›</span>
+        <span class="chev" aria-hidden="true">→</span>
       </a>
     </li>`).join("");
 
@@ -189,19 +204,19 @@ function viewNewTopic() {
   $app.innerHTML = `
     <div class="narrow">
       <a class="back" href="#/">← 주제 목록</a>
-      <h1 style="margin:6px 0 4px;font-size:26px">새 주제</h1>
-      <p style="margin:0 0 18px;color:var(--muted)">AI의 답을 보기 전에, 내 생각을 먼저 붙잡아 두세요.</p>
+      <h1 class="page-title">새 주제</h1>
+      <p class="page-sub">AI의 답을 보기 전에, 내 생각을 먼저 붙잡아 두세요.</p>
 
       <section class="step">
-        <div class="step-label"><span class="step-num">1</span> 주제 이름</div>
+        <div class="step-label"><span class="step-num">01</span> 주제 이름</div>
         <input type="text" id="topic-name" maxlength="40" placeholder="예: 데이터 분석 포트폴리오, 공부법">
       </section>
       <section class="step locked" id="step2">
-        <div class="step-label"><span class="step-num">2</span> 무엇이 궁금한가요?</div>
+        <div class="step-label"><span class="step-num">02</span> 무엇이 궁금한가요?</div>
         <textarea id="question" placeholder="AI에게 물어보고 싶은 첫 질문을 적어 주세요."></textarea>
       </section>
       <section class="step locked" id="step3">
-        <div class="step-label"><span class="step-num">3</span> 내 생각을 먼저 적어 보세요</div>
+        <div class="step-label"><span class="step-num">03</span> 내 생각을 먼저 적어 보세요</div>
         <p class="hint">정답이 아니어도 괜찮아요. 지금 떠오르는 생각, 근거, 헷갈리는 점을 적어 두면 AI 답을 본 뒤에도 내 생각을 잃지 않아요.</p>
         ${promptButtons()}
         <textarea id="thought" class="thought" placeholder="내 생각은…"></textarea>
@@ -252,6 +267,7 @@ async function viewTopic(id, tab, opts = {}) {
           <div class="topic-actions">
             ${starBtn(topic.is_starred, topic.name)}
             <button class="status status-toggle" id="status-btn"></button>
+            ${themeToggle()}
             <button class="btn btn-ghost danger btn-sm" id="del-topic" title="주제 삭제">삭제</button>
           </div>
         </div>
@@ -308,17 +324,21 @@ function bindTopicStar(id, topic) {
 function turnHTML(t, n) {
   return `
     <article class="turn" id="turn-${t.id}" data-id="${t.id}">
-      <div class="turn-meta">
-        <span><b>대화 ${n}</b> · ${fmtDate(t.created_at)}</span>
+      <header class="turn-meta">
+        <span class="turn-no">대화 ${String(n).padStart(2, "0")}</span>
+        <span>${fmtDate(t.created_at)}</span>
         <button class="btn btn-ghost danger btn-sm" data-del-turn>삭제</button>
-      </div>
-      <div class="bubble q">${esc(t.question)}</div>
-      <div class="bubble mine"><span class="bubble-label">내 생각 <small>AI 답을 보기 전에 적음</small></span>${esc(t.my_thought)}</div>
-      <div class="bubble ai">
-        <span class="bubble-label">AI의 답 <small>내 생각은 AI에게 보내지 않았어요</small></span>
+      </header>
+      <h2 class="turn-q">${esc(t.question)}</h2>
+      <section class="block mine">
+        <div class="block-label">내 생각 <small>AI 답을 보기 전에 적음</small></div>
+        <div class="block-body">${esc(t.my_thought)}</div>
+      </section>
+      <section class="block ai">
+        <div class="block-label">AI <small>내 생각은 보내지 않았어요</small></div>
         <div class="md" data-answer>${t.ai_answer ? md(t.ai_answer) : ""}</div>
         ${t.ai_answer ? "" : `<button class="btn btn-primary btn-sm" data-ask>AI 답 보기</button>`}
-      </div>
+      </section>
       <div class="memo" data-memo ${t.ai_answer ? "" : "hidden"}></div>
     </article>`;
 }
@@ -525,7 +545,7 @@ async function renderMapTab($panel, topic, turns, refresh = false) {
         <p id="map-summary">내 생각과 AI 답의 핵심을 모아, 겹치는 생각은 가운데로 모았어요.</p>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
           <span class="legend"><i></i>같은 생각 <i class="similar"></i>비슷한 생각</span>
-          <button class="btn btn-ghost btn-sm" id="map-refresh">↻ 다시 정리</button>
+          <button class="btn btn-sm" id="map-refresh">다시 정리</button>
         </div>
       </div>
       <div id="map-area"><div class="map-loading">대화 전체에서 내 생각과 AI 답의 핵심을 정리하는 중…</div></div>
@@ -625,7 +645,7 @@ async function renderMapTab($panel, topic, turns, refresh = false) {
     $map.classList.toggle("compact", view.compact);
     const $compact = document.getElementById("mv-compact");
     $compact.setAttribute("aria-pressed", String(view.compact));
-    $compact.textContent = view.compact ? "▸ 요약 펼치기" : "▾ 요약 접기";
+    $compact.textContent = view.compact ? "요약 펼치기" : "요약 접기";
     saveMapView(topic.id, view);
     drawMapLines($map);
   };
