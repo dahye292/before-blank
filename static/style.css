@@ -692,3 +692,13 @@ a.file-chip:hover { border-color: var(--quiet); color: var(--text); }
 .wordmark b { color: var(--text); font-weight: 650; margin-right: 4px; }
 .brand-mark .logo { width: 28px; height: 28px; }
 .home-hero { margin-top: 4px; }
+
+/* 아이콘과 이름을 한 덩어리로: 글자 높이에 맞춘 꽉 찬 타일, 좁은 간격, 같은 기준선 */
+.logo { width: 22px; height: 22px; border-radius: 6px; }
+.wordmark { gap: 7px; font-size: 14px; line-height: 1; }
+.wordmark > span { display: inline-flex; align-items: baseline; gap: 5px; }
+.wordmark b { margin-right: 0; font-size: 14.5px; letter-spacing: -0.02em; }
+.brand-mark { gap: 9px; }
+.brand-mark .logo { width: 26px; height: 26px; border-radius: 7px; }
+.brand-name { display: inline-flex; align-items: baseline; gap: 6px; }
+.brand-name b { margin-right: 0; font-size: 15.5px; letter-spacing: -0.02em; }

@@ -93,8 +93,9 @@ function ask({ title, message = "", input = null, confirmText = "확인", cancel
 
 // 비포블랭크 아이콘: 빈칸(점선 상자) 앞에 먼저 놓인 내 생각(호박색 점). 테마에 맞게 색이 바뀐다
 const LOGO = `<svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
-  <rect x="13" y="8.5" width="12.5" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.4"/>
-  <circle cx="8" cy="16" r="3.3" fill="var(--mine)"/></svg>`;
+  <rect width="32" height="32" rx="8" fill="var(--text)"/>
+  <rect x="13.5" y="8.5" width="11.5" height="15" rx="2.5" fill="none" stroke="var(--bg)" stroke-width="2.2" stroke-dasharray="3.2 2.4"/>
+  <circle cx="8.5" cy="16" r="3.4" fill="var(--mine)"/></svg>`;
 
 const statusBadge = (s) =>
   s === "done" ? `<span class="status done"><i></i>완료</span>` : `<span class="status in_progress"><i></i>진행중</span>`;
