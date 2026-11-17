@@ -17,6 +17,8 @@ _HEAT = {
     "turns": [
         {
             "at": 0,
+            "stage": "지표 고르기",
+            "conclusion": "노출(지표면 온도)·민감도(노인 인구 비율)·적응 능력(쉼터 접근성, 녹지 비율) 4개로 확정",
             "question": "폭염 취약지역을 고를 때 어떤 지표를 써야 할까?",
             "my_thought": "기온만 보면 안 되고 사람 쪽 지표가 같이 들어가야 할 것 같아. 노인 인구 비율, 무더위쉼터까지 거리, 녹지 비율 정도를 생각하고 있어. 오늘 안에 지표 3~4개를 확정하는 게 목표야.",
             "ai_answer": "## 세 묶음으로 나눠 보면 정리가 쉬워요\n\n- **노출**: 얼마나 더운가 — 기온, 위성으로 구하는 **지표면 온도**(Landsat 위성 자료는 대기 보정이 필요해요)\n- **민감도**: 더위에 얼마나 약한가 — 65세 이상 비율, 독거노인, 기저질환\n- **적응 능력**: 더위를 피할 수 있는가 — 무더위쉼터 접근성, 녹지 비율, 냉방 시설\n\n묶음마다 1~2개씩, 모두 4~6개면 충분해요. 단위가 다르니 **min-max 정규화**나 **z-score 표준화**로 맞춘 뒤 합치세요.\n\n지금 생각하신 세 지표는 민감도·적응 능력에 해당해요. 노출 지표를 하나 더하면 균형이 맞습니다.",
@@ -24,6 +26,8 @@ _HEAT = {
         },
         {
             "at": 15,
+            "stage": "데이터 출처 정하기",
+            "conclusion": "통계청 SGIS, 공공데이터포털 무더위쉼터, 환경부 토지피복지도, Landsat 8로 확정",
             "question": "노인 인구 비율, 쉼터 접근성, 녹지 비율, 지표면 온도 데이터는 각각 어디서 구해?",
             "my_thought": "인구는 통계청, 쉼터는 공공데이터포털에 있을 것 같아. 녹지랑 지표면 온도는 잘 모르겠어. 출처만 정하고 바로 다음 단계로 가고 싶어.",
             "ai_answer": "## 지표별 출처\n\n- **노인 인구 비율**: 통계청 SGIS 행정동 단위 인구\n- **쉼터 접근성**: 행정안전부 무더위쉼터 목록(공공데이터포털) — 연도별로 바뀌니 **최신 연도**를 확인하세요\n- **녹지 비율**: 환경부 토지피복지도\n- **지표면 온도**: USGS EarthExplorer의 Landsat 8, 또는 **Google Earth Engine**에서 바로 계산\n\n결과는 **kepler.gl로 3D 지도**를 만들면 발표 때 인상적이고, **GitHub Pages**에 올리면 링크로 공유할 수도 있어요.",
@@ -31,6 +35,8 @@ _HEAT = {
         },
         {
             "at": 36,
+            "stage": "가중치 정하기",
+            "conclusion": "25%씩 동일 가중치로 시작, 민감도 분석으로 검증, 녹지·지표면 온도 상관계수 먼저 확인",
             "question": "네 지표에 가중치를 어떻게 주는 게 좋을까?",
             "my_thought": "처음엔 똑같이 25%씩 주고, 다른 가중치와 결과를 비교해 보는 게 공정할 것 같아. 근거 없는 가중치는 심사에서 지적받을 수 있어.",
             "ai_answer": "## 동일 가중치로 시작하고 검증하세요\n\n- **기준안**: 25%씩 동일 가중치 — 설명하기 가장 쉬워요.\n- **비교안**: **엔트로피 가중치**나 전문가 설문(AHP)으로 만든 가중치\n- **민감도 분석**: 가중치를 바꿔도 상위 지역이 크게 바뀌지 않는지 확인하세요.\n\n주의할 점: **녹지 비율과 지표면 온도는 서로 강하게 연결**돼 있어서, 둘을 함께 넣으면 같은 효과를 두 번 세는 셈이 될 수 있어요. 상관계수를 먼저 확인해 보세요.",
@@ -97,10 +103,14 @@ def insert_topic(db, uid, topic):
     ).lastrowid
     ids = []
     for t in topic["turns"]:
+        # 대화마다 단계 하나 (이름·결론이 있으면 그대로, 없으면 질문을 이름으로)
+        stage_id = db.execute(
+            "INSERT INTO stages (topic_id, title, conclusion, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (topic_id, (t.get("stage") or t["question"])[:80], t.get("conclusion", ""), t["at"], t["at"])).lastrowid
         ids.append(db.execute(
-            """INSERT INTO turns (topic_id, question, my_thought, ai_answer, reflection, created_at, updated_at, is_sample)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
-            (topic_id, t["question"], t["my_thought"], t["ai_answer"], t.get("memo", ""), t["at"], t["at"]),
+            """INSERT INTO turns (topic_id, stage_id, question, my_thought, ai_answer, reflection, created_at, updated_at, is_sample)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+            (topic_id, stage_id, t["question"], t["my_thought"], t["ai_answer"], t.get("memo", ""), t["at"], t["at"]),
         ).lastrowid)
     if topic.get("mindmap"):
         # 마인드맵의 순서 번호 → 실제 turn id, 그리고 캐시가 그대로 쓰이도록 signature를 맞춘다

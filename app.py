@@ -98,7 +98,7 @@ SYSTEM_PROMPT = (
     "질문에 한국어로 명확하고 간결하게 답하세요. "
     "결론만 주지 말고, 어떤 관점과 근거로 그렇게 보는지 드러내고, "
     "다르게 볼 수 있는 지점이 있으면 함께 짚어 주세요. "
-    "같은 주제의 이전 질문과 답이 함께 주어지면 그 흐름을 이어서 답하세요. "
+    "같은 단계의 이전 질문과 답이 함께 주어지면 그 흐름을 이어서 답하고, 앞 단계에서 사용자가 정한 것이 주어지면 그 결정을 전제로 답하세요. "
     "질문에 링크가 있으면 web_fetch로 그 페이지를 직접 읽고, 최근 사실이 필요하면 web_search로 찾아 근거로 쓰세요. "
     "비교가 필요하면 마크다운 표를 써도 되고, 참고한 페이지는 [제목](주소) 링크로 남기세요."
 )
@@ -151,6 +151,15 @@ def init_db():
                 gender TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS stages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+                title TEXT NOT NULL,
+                conclusion TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_stages_topic ON stages(topic_id);
             CREATE TABLE IF NOT EXISTS rate_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 kind TEXT NOT NULL,
@@ -311,6 +320,19 @@ def init_db():
             # 예시로 넣은 메모는 그 대화와 같은 시각에 만들어졌다 (사용자가 나중에 담은 메모와 구분)
             db.execute("""UPDATE side_notes SET is_sample = 1 WHERE EXISTS (
                 SELECT 1 FROM turns tu WHERE tu.id = side_notes.turn_id AND tu.is_sample = 1 AND tu.created_at = side_notes.created_at)""")
+        if "stage_id" not in columns(db, "turns"):
+            # 한 주제 = 단계 박스들. 지금까지의 질문은 하나씩 단계가 되고,
+            # 내 생각 없이 이어 물은 꼬리 질문은 바로 앞 단계 박스에 붙인다
+            db.execute("ALTER TABLE turns ADD COLUMN stage_id INTEGER REFERENCES stages(id) ON DELETE CASCADE")
+            for (topic_id,) in db.execute("SELECT DISTINCT topic_id FROM turns").fetchall():
+                current = None
+                for tid, question, thought, created in db.execute(
+                        "SELECT id, question, my_thought, created_at FROM turns WHERE topic_id = ? ORDER BY id", (topic_id,)).fetchall():
+                    if current is None or (thought or "").strip():
+                        current = db.execute(
+                            "INSERT INTO stages (topic_id, title, conclusion, created_at, updated_at) VALUES (?, ?, '', ?, ?)",
+                            (topic_id, question[:80], created, created)).lastrowid
+                    db.execute("UPDATE turns SET stage_id = ? WHERE id = ?", (current, tid))
         db.commit()
     finally:
         db.close()
@@ -997,7 +1019,7 @@ def get_topic(topic_id):
     if not topic:
         return jsonify(error="주제를 찾을 수 없어요."), 404
     turns = [dict(t) for t in db.execute(
-        "SELECT id, question, my_thought, ai_answer, reflection, created_at FROM turns WHERE topic_id = ? ORDER BY id",
+        "SELECT id, stage_id, question, my_thought, ai_answer, reflection, created_at FROM turns WHERE topic_id = ? ORDER BY id",
         (topic_id,),
     )]
     atts = attachments_of(db, [t["id"] for t in turns])
@@ -1005,7 +1027,9 @@ def get_topic(topic_id):
         t["attachments"] = atts.get(t["id"], [])
     notes = [dict(r) for r in db.execute(
         "SELECT id, turn_id, kind, text, note, priority, done, created_at FROM side_notes WHERE topic_id = ? ORDER BY id", (topic_id,))]
-    return jsonify(topic=dict(topic), turns=turns, notes=notes)
+    stages = [dict(r) for r in db.execute(
+        "SELECT id, title, conclusion, created_at FROM stages WHERE topic_id = ? ORDER BY id", (topic_id,))]
+    return jsonify(topic=dict(topic), turns=turns, notes=notes, stages=stages)
 
 
 @app.patch("/api/topics/<int:topic_id>")
@@ -1147,20 +1171,34 @@ def create_turn(topic_id):
     db = get_db()
     if not own_topic(db, topic_id):
         return jsonify(error="주제를 찾을 수 없어요."), 404
-    # 주제의 첫 질문은 내 생각을 꼭 먼저 적는다. AI 답을 받은 뒤 이어서 묻는 꼬리 질문은 건너뛸 수 있다
-    # ("이 부분은 무슨 뜻이지?" 같은 짧은 질문까지 매번 생각을 적게 하면 대화가 끊긴다는 사용자 피드백)
-    follow_up = db.execute("SELECT 1 FROM turns WHERE topic_id = ? AND ai_answer IS NOT NULL LIMIT 1", (topic_id,)).fetchone()
-    if len(thought) < MIN_THOUGHT_LEN and not follow_up:
-        return jsonify(error="내 생각을 먼저 적어야 AI 답을 볼 수 있어요."), 400
+    # 한 주제는 단계 박스들로 나뉜다. stage_id가 있으면 그 단계 안에서 이어 묻는 꼬리 질문,
+    # 없으면 새 단계를 연다. 단계의 첫 질문은 내 생각을 꼭 먼저 적고,
+    # 같은 단계에서 AI 답을 받은 뒤의 꼬리 질문만 내 생각을 건너뛸 수 있다
     ts = now()
+    stage_id = data.get("stage_id")
+    if stage_id:
+        stage = db.execute("SELECT id FROM stages WHERE id = ? AND topic_id = ?", (stage_id, topic_id)).fetchone()
+        if not stage:
+            return jsonify(error="단계를 찾을 수 없어요."), 404
+        answered = db.execute("SELECT 1 FROM turns WHERE stage_id = ? AND ai_answer IS NOT NULL LIMIT 1", (stage_id,)).fetchone()
+        if len(thought) < MIN_THOUGHT_LEN and not answered:
+            return jsonify(error="내 생각을 먼저 적어야 AI 답을 볼 수 있어요."), 400
+    else:
+        if len(thought) < MIN_THOUGHT_LEN:
+            return jsonify(error="새 단계의 첫 질문은 내 생각을 먼저 적어야 해요."), 400
+        title = (str(data.get("stage_title") or "").strip() or question)[:80]
+        stage_id = db.execute(
+            "INSERT INTO stages (topic_id, title, conclusion, created_at, updated_at) VALUES (?, ?, '', ?, ?)",
+            (topic_id, title, ts, ts)).lastrowid
     cur = db.execute(
-        "INSERT INTO turns (topic_id, question, my_thought, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-        (topic_id, question, thought, ts, ts),
+        "INSERT INTO turns (topic_id, stage_id, question, my_thought, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (topic_id, stage_id, question, thought, ts, ts),
     )
+    db.execute("UPDATE stages SET updated_at = ? WHERE id = ?", (ts, stage_id))
     # 새 질문을 이어 가면 주제는 다시 '진행중'
     db.execute("UPDATE topics SET status = 'in_progress', updated_at = ? WHERE id = ?", (ts, topic_id))
     db.commit()
-    return jsonify(id=cur.lastrowid), 201
+    return jsonify(id=cur.lastrowid, stage_id=stage_id), 201
 
 
 @app.patch("/api/turns/<int:turn_id>")
@@ -1184,30 +1222,73 @@ def update_turn(turn_id):
 @login_required
 def delete_turn(turn_id):
     db = get_db()
-    if not own_turn(db, turn_id):
+    turn = own_turn(db, turn_id)
+    if not turn:
         return jsonify(error="대화를 찾을 수 없어요."), 404
     remove_files(db.execute("SELECT stored_name FROM attachments WHERE turn_id = ?", (turn_id,)).fetchall())
     db.execute("DELETE FROM turns WHERE id = ?", (turn_id,))
+    # 질문이 하나도 남지 않은 단계는 함께 지운다
+    db.execute("DELETE FROM stages WHERE id = ? AND NOT EXISTS (SELECT 1 FROM turns WHERE stage_id = ?)", (turn["stage_id"], turn["stage_id"]))
     db.commit()
     return jsonify(ok=True)
 
 
+@app.patch("/api/stages/<int:stage_id>")
+@login_required
+def update_stage(stage_id):
+    """단계 이름과 '이 단계 결론'(다음 단계로 넘길 내용)을 고친다."""
+    data = request.json or {}
+    db = get_db()
+    stage = db.execute("SELECT s.* FROM stages s JOIN topics t ON t.id = s.topic_id WHERE s.id = ? AND t.user_id = ?",
+                       (stage_id, current_user_id())).fetchone()
+    if not stage:
+        return jsonify(error="단계를 찾을 수 없어요."), 404
+    title = str(data.get("title", stage["title"])).strip()[:80]
+    if not title:
+        return jsonify(error="단계 이름을 적어 주세요."), 400
+    conclusion = str(data.get("conclusion", stage["conclusion"])).strip()[:500]
+    db.execute("UPDATE stages SET title = ?, conclusion = ?, updated_at = ? WHERE id = ?", (title, conclusion, now(), stage_id))
+    db.commit()
+    return jsonify(id=stage_id, title=title, conclusion=conclusion)
+
+
 # ---------- AI 답변 (스트리밍) ----------
 
+def stage_preface(db, turn):
+    """앞 단계에서 '내가 정한 것'만 짧게 알려 준다 (단계 이름 + 결론). 앞 단계의 대화 자체는 보내지 않아
+    단계끼리 섞이지 않고, 깊이 파고들어도 산으로 가지 않게 한다. 결론이 비어 있으면 그 단계의 생각 메모를 쓴다."""
+    topic = db.execute("SELECT name FROM topics WHERE id = ?", (turn["topic_id"],)).fetchone()
+    lines = []
+    for st in db.execute("SELECT id, title, conclusion FROM stages WHERE topic_id = ? AND id < ? ORDER BY id",
+                         (turn["topic_id"], turn["stage_id"] or 0)):
+        decided = st["conclusion"].strip() or " / ".join(
+            r[0].strip() for r in db.execute(
+                "SELECT reflection FROM turns WHERE stage_id = ? AND trim(coalesce(reflection, '')) != '' ORDER BY id", (st["id"],)))
+        lines.append(f"- {st['title']}" + (f": {decided}" if decided else ""))
+    head = f"[주제: {topic['name']}]"
+    if lines:
+        head += "\n이 주제는 단계별로 진행 중이에요. 앞 단계에서 사용자가 정한 것:\n" + "\n".join(lines) + \
+                "\n지금 단계의 질문에만 집중해서 답해 주세요."
+    return head
+
+
 def history_messages(db, turn):
-    """같은 주제의 이전 턴 중 답이 있는 것을 대화 기록으로 넣는다. 내 생각은 넣지 않는다."""
+    """같은 단계 안의 이전 질문·답만 대화 기록으로 넣고, 앞 단계는 '정한 것'만 머리말로 붙인다. 내 생각은 넣지 않는다."""
+    pairs = db.execute(
+        "SELECT question, ai_answer FROM turns WHERE stage_id = ? AND id < ? AND ai_answer IS NOT NULL ORDER BY id",
+        (turn["stage_id"], turn["id"]),
+    ).fetchall() if turn["stage_id"] else []
+    preface = stage_preface(db, turn) + "\n\n"
     msgs = []
-    for t in db.execute(
-        "SELECT question, ai_answer FROM turns WHERE topic_id = ? AND id < ? AND ai_answer IS NOT NULL ORDER BY id",
-        (turn["topic_id"], turn["id"]),
-    ):
-        msgs.append({"role": "user", "content": t["question"]})
+    for i, t in enumerate(pairs):
+        msgs.append({"role": "user", "content": (preface if i == 0 else "") + t["question"]})
         msgs.append({"role": "assistant", "content": t["ai_answer"]})
+    question = ("" if pairs else preface) + turn["question"]
     blocks = attachment_blocks(db, turn["id"])
     if blocks:
-        msgs.append({"role": "user", "content": blocks + [{"type": "text", "text": "위 첨부 자료를 참고해서 답해 주세요.\n\n" + turn["question"]}]})
+        msgs.append({"role": "user", "content": blocks + [{"type": "text", "text": "위 첨부 자료를 참고해서 답해 주세요.\n\n" + question}]})
     else:
-        msgs.append({"role": "user", "content": turn["question"]})
+        msgs.append({"role": "user", "content": question})
     return msgs
 
 
@@ -1364,6 +1445,7 @@ MINDMAP_SCHEMA = {
 }
 
 MINDMAP_PROMPT = """아래는 '{topic}' 주제로 나눈 대화입니다. 각 턴마다 사용자가 AI 답을 보기 전에 먼저 적은 생각(my_thought)과 AI의 답(ai_answer)이 있습니다.
+my_thought가 비어 있는 턴은 사용자가 같은 단계에서 생각 없이 이어 물은 꼬리 질문이므로, 그 턴에서는 사용자 쪽 요점을 만들지 마세요.
 주제 전체에 걸쳐 두 쪽의 핵심 요점을 뽑아 세 묶음으로 나눠 주세요.
 
 - shared: 사용자 생각과 AI 답에 공통으로 들어 있는 요점. 사실상 같은 주장이면 kind "same", 방향은 같지만 강조점이나 범위가 다르면 "similar". 억지로 만들지 말고, 없으면 빈 배열.
@@ -1421,7 +1503,8 @@ def demo_mindmap(turns, db=None):
     mm = {"mine_only": [], "shared": [], "ai_only": []}
     for i, t in enumerate(turns):
         first = re.split(r"(?<=[.!?。])\s+|\n", t["my_thought"].strip())[0]
-        mm["mine_only"].append({"label": short(first), "detail": first, "turn_ids": [t["id"]]})
+        if first:  # 내 생각을 건너뛴 꼬리 질문은 '나만의 관점'이 없다
+            mm["mine_only"].append({"label": short(first), "detail": first, "turn_ids": [t["id"]]})
         bullets = re.findall(r"\*\*(.+?)\*\*", t["ai_answer"] or "")
         if bullets:
             mm["ai_only"].append({"label": short(bullets[-1]), "detail": bullets[-1], "turn_ids": [t["id"]]})

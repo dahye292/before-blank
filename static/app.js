@@ -706,6 +706,7 @@ async function viewTopic(id, tab, opts = {}) {
   catch (err) { $app.innerHTML = `<div class="narrow"><a class="back" href="#/">← 주제 목록</a><div class="empty">${esc(err.message)}</div></div>`; return; }
   const { topic, turns } = data;
   chatCtx.topic = topic; chatCtx.turns = turns; chatCtx.notes = data.notes || [];
+  chatCtx.stages = data.stages || []; chatCtx.target = null;  // 단계 박스들, 입력창이 물을 곳(단계 id 또는 'new')
   chatCtx.filter = "all"; chatCtx.adding = false; chatCtx.open = false;
 
   $app.innerHTML = `
@@ -990,8 +991,8 @@ const shortLinks = (s) => String(s).replace(/https?:\/\/(?:www\.)?([^\/\s?#]+)[^
 const GUIDE = [
   ["질문 → 내 생각 → AI 답", "질문을 적고, AI 답을 보기 전에 내 생각을 먼저 적어요. 내 생각은 AI에게 보내지 않아요.",
    "AI 답을 먼저 보면 내 생각이 떠오르지 않고 AI의 말을 따라가게 돼요. 먼저 적어 둔 생각이 비교의 기준이 돼요."],
-  ["이어서 묻기", "AI 답을 받은 뒤에는 같은 주제 안에서 꼬리 질문을 계속 이어 갈 수 있어요. 꼬리 질문은 내 생각을 건너뛰고 '바로 묻기'도 돼요(Enter는 내 생각 적기, Ctrl+Enter는 바로 묻기). 지난 질문은 한 줄로 접혀요.",
-   "새 주제를 만들지 않고 한 흐름으로 이어 가야 생각이 흩어지지 않아요."],
+  ["단계로 나눠 묻기", "한 주제는 단계 박스로 나뉘어요(예: ① 지표 고르기 → ② 수치 정하기). 궁금한 건 그 단계 안에서 이어서 묻고(꼬리 질문은 Ctrl+Enter로 내 생각 없이 바로), 단계가 끝나면 '이 단계 결론'을 한 줄로 적고 '+ 새 단계'로 넘어가요.",
+   "단계마다 그 단계 질문만 모여 있어 찾기 쉽고, AI에게는 그 단계 대화와 앞 단계 결론만 가서 깊이 물어도 산으로 가지 않아요."],
   ["메모함", "AI 답에서 문장을 드래그(휴대폰은 길게 눌러 선택)하면 '확인할 것 · 할 일 · 마음에 드는 것'으로 담겨요. 메모마다 우선순위를 정하면 높은 것부터 위로 정렬돼요.",
    "AI 답의 곁가지를 바로 따라가면 대화가 원래 주제에서 벗어나요. 지금은 담아 두고, 나중에 하나씩 처리해요."],
   ["생각 메모", "AI 답을 본 뒤, 내 생각과 비교해 무엇이 같고 달랐는지 한 줄로 남겨요.",
@@ -1115,23 +1116,15 @@ function renderChatTab($panel, topic, turns, opts) {
   $panel.innerHTML = `
    <div class="chat-wrap">
     <div class="chat">
-      <div id="turns">${turns.length ? turns.map((t, i) => turnHTML(t, i + 1, i < turns.length - 1)).join("") : `
-        <div class="chat-start">
-          <h2>'${esc(topic.name)}'에 대해 무엇이 궁금한가요?</h2>
-          <p>아래 입력창에 첫 질문을 적어 주세요. 이렇게 진행돼요.</p>
-          <ol class="flow-preview">
-            <li><span class="step-num">01</span> 질문을 적어요</li>
-            <li><span class="step-num">02</span> AI 답을 보기 전에 내 생각을 먼저 써요</li>
-            <li><span class="step-num">03</span> AI 답을 보고, 내 생각과 비교해 메모해요</li>
-          </ol>
-        </div>`}</div>
+      <nav class="stage-nav" id="stage-nav" aria-label="단계 목차"></nav>
+      <div id="turns"></div>
       <div class="composer" id="composer"></div>
     </div>
     <aside class="notes-panel" id="notes-panel" aria-label="메모함"></aside>
     <button class="np-edge" id="np-edge" title="메모함 열기" aria-label="메모함 열기"><span class="np-edge-label">메모함</span><span class="np-edge-count" data-notes-count>0</span></button>
    </div>`;
 
-  turns.forEach((t) => bindTurn(t));
+  renderStages(topic, turns);
   renderComposer(topic, turns);
   renderNotes();
   bindNotesPanel();
@@ -1154,6 +1147,134 @@ function renderChatTab($panel, topic, turns, opts) {
   if (opts.turn) jumpToTurn(opts.turn);
   else if (!turns.length) document.getElementById("c-question")?.focus();
   else window.scrollTo(0, document.body.scrollHeight);
+}
+
+// ---------- 단계 박스 ----------
+// 한 주제는 단계(박스)들로 나뉜다. 예: ① 지표 고르기 → ② 수치·적정값 정하기.
+// 꼬리 질문은 그 단계 박스 안에서만 이어 가고, AI에게는 그 단계의 대화 + 앞 단계에서 '내가 정한 결론'만 보낸다.
+function stageHTML(st, no, sts, folded) {
+  return `
+    <section class="stage ${folded ? "folded" : ""}" id="stage-${st.id}" data-stage="${st.id}">
+      <header class="stage-head">
+        <button class="stage-toggle" data-stage-toggle aria-expanded="${!folded}" title="${folded ? "펼치기" : "접기"}">
+          <span class="st-no">단계 ${no}</span>
+          <span class="st-title">${esc(shortLinks(st.title))}</span>
+          <span class="st-meta">질문 ${sts.length}</span>
+          <span class="st-caret" aria-hidden="true">▾</span>
+        </button>
+        <button class="btn btn-ghost btn-sm" data-stage-rename title="단계 이름 바꾸기">이름 바꾸기</button>
+      </header>
+      <p class="stage-sum">${st.conclusion ? `<b>결론</b> ${esc(st.conclusion)}` : esc(clip(sts.at(-1)?.question || "", 120))}</p>
+      <div class="stage-body">
+        ${sts.map((t, i) => turnHTML(t, i + 1, i < sts.length - 1)).join("")}
+        <div class="stage-end">
+          <div class="stage-concl" data-concl></div>
+          <button class="btn btn-sm stage-ask" data-stage-ask>이 단계에서 이어서 묻기</button>
+        </div>
+      </div>
+    </section>`;
+}
+
+function renderStages(topic, turns, openId) {
+  const stages = chatCtx.stages;
+  const $turns = document.getElementById("turns");
+  const $nav = document.getElementById("stage-nav");
+  if (!stages.length) {
+    $nav.innerHTML = "";
+    $turns.innerHTML = `
+      <div class="chat-start">
+        <h2>'${esc(topic.name)}'에 대해 무엇이 궁금한가요?</h2>
+        <p>질문은 <b>단계</b>로 나눠 이어 가요. 예를 들어 ① 큰 뼈대(지표)를 정하고 → ② 수치·적정값을 정하는 식이에요.</p>
+        <ol class="flow-preview">
+          <li><span class="step-num">01</span> 단계의 첫 질문과 내 생각을 적고 AI 답을 봐요</li>
+          <li><span class="step-num">02</span> 궁금한 건 그 단계 안에서 이어서 물어요</li>
+          <li><span class="step-num">03</span> 단계 결론을 한 줄로 적고 다음 단계로 넘어가요</li>
+        </ol>
+      </div>`;
+    return;
+  }
+  const open = openId ?? (chatCtx.target && chatCtx.target !== "new" ? chatCtx.target : stages.at(-1).id);
+  $turns.innerHTML = stages.map((st, i) => stageHTML(st, i + 1, turns.filter((t) => t.stage_id === st.id), st.id !== open)).join("");
+  $nav.innerHTML = `
+    <span class="sn-label">단계</span>
+    ${stages.map((st, i) => `<button class="sn-item ${st.id === open ? "on" : ""}" data-goto-stage="${st.id}" title="${esc(st.title)}"><span class="sn-no">${i + 1}</span>${esc(clip(shortLinks(st.title), 16))}</button>`).join("")}
+    <button class="sn-item sn-new" data-new-stage>+ 새 단계</button>`;
+  turns.forEach((t) => bindTurn(t));
+  stages.forEach((st) => bindStage(topic, turns, st));
+  $nav.onclick = (e) => {
+    const go = e.target.closest("[data-goto-stage]");
+    if (go) { openStage(Number(go.dataset.gotoStage), true); return; }
+    if (e.target.closest("[data-new-stage]")) {
+      chatCtx.target = "new"; renderComposer(topic, turns);
+      document.getElementById("c-question")?.focus();
+    }
+  };
+}
+
+function openStage(id, scroll) {
+  const $st = document.getElementById(`stage-${id}`);
+  if (!$st) return;
+  $st.classList.remove("folded");
+  $st.querySelector("[data-stage-toggle]").setAttribute("aria-expanded", "true");
+  document.querySelectorAll("[data-goto-stage]").forEach((b) => b.classList.toggle("on", Number(b.dataset.gotoStage) === id));
+  if (scroll) $st.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function bindStage(topic, turns, st) {
+  const $st = document.getElementById(`stage-${st.id}`);
+  $st.querySelector("[data-stage-toggle]").onclick = () => {
+    const fold = !$st.classList.contains("folded");
+    $st.classList.toggle("folded", fold);
+    $st.querySelector("[data-stage-toggle]").setAttribute("aria-expanded", String(!fold));
+  };
+  $st.querySelector("[data-stage-rename]").onclick = async () => {
+    const title = await ask({ title: "단계 이름", input: { value: st.title, maxlength: 80, placeholder: "예: 지표 고르기" }, confirmText: "바꾸기" });
+    if (!title || title.trim() === st.title) return;
+    try {
+      const r = await api(`/api/stages/${st.id}`, { method: "PATCH", body: { title: title.trim() } });
+      st.title = r.title;
+      renderStages(topic, turns, st.id);
+      renderComposer(topic, turns);
+    } catch (err) { toast(err.message); }
+  };
+  $st.querySelector("[data-stage-ask]").onclick = () => {
+    chatCtx.target = st.id; renderComposer(topic, turns);
+    document.getElementById("c-question")?.focus();
+  };
+  renderConclusion(topic, turns, st);
+}
+
+// 이 단계 결론: 다음 단계에서 AI에게는 앞 단계 대화 대신 이 한 줄만 전해진다
+function renderConclusion(topic, turns, st, editing = false) {
+  const $c = document.querySelector(`#stage-${st.id} [data-concl]`);
+  if (!$c) return;
+  if (editing) {
+    $c.innerHTML = `
+      <div class="concl-box editing">
+        <div class="concl-head">이 단계 결론 <small>다음 단계에서 AI에게는 이 결론만 전해져요</small></div>
+        <textarea maxlength="500" placeholder="이 단계에서 정한 것을 한 줄로 (예: 지표는 노출·민감도·적응 능력 4개로 확정)">${esc(st.conclusion || "")}</textarea>
+        <div class="memo-btns"><button class="btn btn-ghost btn-sm" data-c-cancel>취소</button><button class="btn btn-primary btn-sm" data-c-save>저장</button></div>
+      </div>`;
+    const $ta = $c.querySelector("textarea");
+    $ta.focus();
+    $c.querySelector("[data-c-cancel]").onclick = () => renderConclusion(topic, turns, st);
+    $c.querySelector("[data-c-save]").onclick = async () => {
+      try {
+        const r = await api(`/api/stages/${st.id}`, { method: "PATCH", body: { conclusion: $ta.value } });
+        st.conclusion = r.conclusion;
+        renderConclusion(topic, turns, st);
+        const $sum = document.querySelector(`#stage-${st.id} .stage-sum`);
+        if ($sum && st.conclusion) $sum.innerHTML = `<b>결론</b> ${esc(st.conclusion)}`;
+        toast("단계 결론을 저장했어요");
+      } catch (err) { toast(err.message); }
+    };
+    return;
+  }
+  const answered = turns.some((t) => t.stage_id === st.id && t.ai_answer);
+  $c.innerHTML = st.conclusion
+    ? `<div class="concl-box"><div class="concl-head">이 단계 결론 <button class="btn btn-ghost btn-sm" data-c-edit>수정</button></div><p class="concl-text">${esc(st.conclusion)}</p></div>`
+    : answered ? `<button class="concl-add" data-c-edit>+ 이 단계 결론 적기 <small>다음 단계로 넘길 내용</small></button>` : "";
+  $c.querySelector("[data-c-edit]")?.addEventListener("click", () => renderConclusion(topic, turns, st, true));
 }
 
 // 지난 질문은 접어서 한 줄로: 길게 늘어지지 않게, 누르면 다시 펼친다
@@ -1247,6 +1368,15 @@ async function streamAnswer(t) {
     $memo.hidden = false;
     renderMemo(t);
     updateDragHint();
+    const st = (chatCtx.stages || []).find((x) => x.id === t.stage_id);
+    if (st) renderConclusion(chatCtx.topic, chatCtx.turns, st);
+    // 답을 받았으니 이 단계에서는 '바로 묻기'가 가능해진다 → 입력창을 새로 그리되, 쓰던 질문과 커서는 그대로
+    const draft = state.drafts[chatCtx.topic.id];
+    if (!document.getElementById("c-quick") && (!draft || draft.step === 1) && chatCtx.target === t.stage_id) {
+      const focused = document.activeElement?.id === "c-question";
+      renderComposer(chatCtx.topic, chatCtx.turns);
+      if (focused) { const $q = document.getElementById("c-question"); $q.focus(); $q.setSelectionRange($q.value.length, $q.value.length); }
+    }
   } catch (err) {
     $body.innerHTML = `<p class="err">${esc(err.message)}</p>`;
     if (err.code === "no_ai_access") {
@@ -1295,8 +1425,23 @@ function renderComposer(topic, turns) {
   const $c = document.getElementById("composer");
   const draft = (state.drafts[topic.id] ||= { step: 1, question: "", thought: "", files: [] });
   draft.files ||= [];
-  // AI 답을 한 번이라도 받은 주제에서는 꼬리 질문 → 내 생각을 건너뛰고 바로 물을 수 있다 (첫 질문은 꼭 내 생각부터)
-  const canSkip = turns.some((x) => x.ai_answer);
+  // 물을 곳: 기본은 마지막 단계에서 이어서. 단계의 첫 질문은 내 생각부터, 같은 단계에서 AI 답을 받은 뒤의 꼬리 질문은 '바로 묻기' 가능
+  const stages = chatCtx.stages || [];
+  if (chatCtx.target == null || (chatCtx.target !== "new" && !stages.some((x) => x.id === chatCtx.target))) {
+    chatCtx.target = stages.length ? stages.at(-1).id : "new";
+  }
+  const target = chatCtx.target;
+  const tNo = stages.findIndex((x) => x.id === target) + 1;
+  const canSkip = target !== "new" && turns.some((x) => x.stage_id === target && x.ai_answer);
+  const targetBar = !stages.length ? "" : draft.step === 1 ? `
+    <div class="c-target">
+      <label for="c-target">어디에 물을까요</label>
+      <select id="c-target">
+        ${stages.map((x, i) => `<option value="${x.id}" ${target === x.id ? "selected" : ""}>단계 ${i + 1} · ${esc(clip(shortLinks(x.title), 24))} 에서 이어서</option>`).join("")}
+        <option value="new" ${target === "new" ? "selected" : ""}>＋ 새 단계 시작</option>
+      </select>
+      ${target === "new" ? `<input id="c-stage-title" class="c-stage-title" maxlength="80" placeholder="새 단계 이름 (선택, 예: 수치 정하기)" value="${esc(draft.stageTitle || "")}">` : ""}
+    </div>` : `<div class="c-target static">${target === "new" ? `＋ 새 단계${draft.stageTitle ? ` · ${esc(draft.stageTitle)}` : ""}` : `단계 ${tNo} · ${esc(clip(shortLinks(stages[tNo - 1].title), 30))} 에서 이어서`}</div>`;
   const qHint = (q) => !q.trim() ? "질문을 적으면 다음 단계로 넘어갈 수 있어요"
     : canSkip ? `Enter: 내 생각 적기 · ${MOD_KEY}+Enter: 바로 묻기` : "Enter를 누르면 내 생각을 적는 단계로 가요";
   const pendingChips = () => draft.files.map((f, i) =>
@@ -1305,8 +1450,9 @@ function renderComposer(topic, turns) {
   if (draft.step === 1) {
     $c.innerHTML = `
       <div class="composer-box">
+        ${targetBar}
         ${composerSteps(1)}
-        <textarea id="c-question" rows="2" aria-label="질문" placeholder="${turns.length ? "이어서 물어볼 질문을 적어 주세요 (예: 이 부분은 무슨 뜻이야?)" : "첫 질문을 적어 주세요"}">${esc(draft.question)}</textarea>
+        <textarea id="c-question" rows="2" aria-label="질문" placeholder="${target === "new" ? (stages.length ? "새 단계의 첫 질문을 적어 주세요" : "첫 질문을 적어 주세요") : "이 단계에서 이어서 물을 질문 (예: 이 부분은 무슨 뜻이야?)"}">${esc(draft.question)}</textarea>
         <div class="c-files" id="c-files">${pendingChips()}</div>
         <div class="actions" style="margin-top:4px">
           <label class="attach-btn" title="자료 첨부 (txt, md, csv, pdf, 이미지 · ${MAX_MB}MB, ${MAX_FILES}개까지)">
@@ -1320,6 +1466,15 @@ function renderComposer(topic, turns) {
       </div>`;
     const $q = document.getElementById("c-question");
     const $next = document.getElementById("c-next");
+    const $target = document.getElementById("c-target");
+    if ($target) $target.onchange = () => {
+      chatCtx.target = $target.value === "new" ? "new" : Number($target.value);
+      if (chatCtx.target !== "new") openStage(chatCtx.target, false);
+      renderComposer(topic, turns);
+      document.getElementById(chatCtx.target === "new" ? "c-stage-title" : "c-question")?.focus();
+    };
+    const $st = document.getElementById("c-stage-title");
+    if ($st) $st.oninput = () => { draft.stageTitle = $st.value; };
     $q.oninput = () => {
       draft.question = $q.value; $next.disabled = !$q.value.trim();
       const $quick = document.getElementById("c-quick");
@@ -1357,9 +1512,10 @@ function renderComposer(topic, turns) {
 
   $c.innerHTML = `
     <div class="composer-box">
+      ${targetBar}
       ${composerSteps(2)}
       <div class="composer-q">${esc(draft.question)}${draft.files.length ? `<div class="c-files">${pendingChips()}</div>` : ""}</div>
-      <div class="composer-label">AI에게 보내기 전에, 내 생각을 먼저 적어 보세요 <small>(AI에게는 보내지 않아요${canSkip ? " · 꼬리 질문은 비워 둬도 돼요" : ""})</small></div>
+      <div class="composer-label">AI에게 보내기 전에, 내 생각을 먼저 적어 보세요 <small>(AI에게는 보내지 않아요${canSkip ? " · 이 단계의 꼬리 질문은 비워 둬도 돼요" : ""})</small></div>
       ${promptButtons()}
       <textarea id="c-thought" class="thought" aria-label="내 생각" placeholder="내 생각은…">${esc(draft.thought)}</textarea>
       <div class="actions">
@@ -1385,9 +1541,15 @@ function renderComposer(topic, turns) {
 async function submitTurn(topic, turns, draft, $btn) {
     $btn.disabled = true;
     try {
-      const { id } = await api(`/api/topics/${topic.id}/turns`, {
-        method: "POST", body: { question: draft.question.trim(), my_thought: draft.thought.trim() },
-      });
+      const target = chatCtx.target;
+      const body = { question: draft.question.trim(), my_thought: draft.thought.trim() };
+      if (target && target !== "new") body.stage_id = target;
+      else if (draft.stageTitle?.trim()) body.stage_title = draft.stageTitle.trim();
+      const { id, stage_id } = await api(`/api/topics/${topic.id}/turns`, { method: "POST", body });
+      if (!chatCtx.stages.some((x) => x.id === stage_id)) {
+        chatCtx.stages.push({ id: stage_id, title: (body.stage_title || body.question).slice(0, 80), conclusion: "", created_at: new Date().toISOString() });
+      }
+      chatCtx.target = stage_id;
       let attachments = [];
       if (draft.files.length) {
         try { attachments = await uploadFiles(id, draft.files); }
@@ -1395,13 +1557,9 @@ async function submitTurn(topic, turns, draft, $btn) {
       }
       if (draft.fromNote) saveNote(draft.fromNote, { done: true }).catch(() => {});
       delete state.drafts[topic.id];
-      const t = { id, question: draft.question.trim(), my_thought: draft.thought.trim(), ai_answer: null, reflection: null, created_at: new Date().toISOString(), attachments };
+      const t = { id, stage_id, question: draft.question.trim(), my_thought: draft.thought.trim(), ai_answer: null, reflection: null, created_at: new Date().toISOString(), attachments };
       turns.push(t);
-      const $turns = document.getElementById("turns");
-      $turns.querySelector(".empty, .chat-start")?.remove();
-      turns.slice(0, -1).forEach((x) => foldTurn(x, true));
-      $turns.insertAdjacentHTML("beforeend", turnHTML(t, turns.length));
-      bindTurn(t);
+      renderStages(topic, turns, stage_id);  // 그 단계만 펼치고, 단계 안의 지난 질문은 접힌다
       renderComposer(topic, turns);
       // 새 질문을 이어 가면 주제는 진행중으로 돌아간다
       const $sb = document.getElementById("status-btn");
@@ -1418,6 +1576,8 @@ function jumpToTurn(turnId) {
   const $t = document.getElementById(`turn-${turnId}`);
   if (!$t) { toast("해당 대화를 찾을 수 없어요."); return; }
   $t.classList.remove("folded");  // 접혀 있던 질문이면 펼쳐서 보여 준다
+  const $st = $t.closest(".stage");
+  if ($st) openStage(Number($st.dataset.stage), false);
   // 고정된 주제 머리에 가리지 않게 그 높이만큼 띄워서 스크롤
   const headH = document.querySelector(".topic-head")?.offsetHeight || 100;
   document.documentElement.style.setProperty("--head-h", `${headH + 16}px`);
@@ -1596,11 +1756,16 @@ function paintMap(ctx) {
   };
 
   // ---- 질문별로 묶기: 요점은 처음 나온 대화 아래에 둔다 ----
-  const groups = new Map(turns.map((t) => [t.id, { turn: t, mine: [], shared: [], ai: [] }]));
+  // 단계마다 한 줄: 그 단계의 첫 질문이 대표, 요점은 처음 나온 대화가 속한 단계 아래에
+  const stageList = chatCtx.stages || [];
+  const stageOf = Object.fromEntries(turns.map((t) => [t.id, t.stage_id]));
+  const groups = new Map(stageList
+    .map((st, i) => [st.id, { turn: turns.find((t) => t.stage_id === st.id), stage: st, no: i + 1, mine: [], shared: [], ai: [] }])
+    .filter(([, g]) => g.turn));
   const manual = { turn: null, mine: [], shared: [], ai: [] };
   for (const side of ["mine", "shared", "ai"]) {
     items[side].forEach((p, i) => {
-      const g = groups.get(p.turn_ids[0]) || manual;
+      const g = groups.get(stageOf[p.turn_ids[0]]) || manual;
       g[side].push({ p, i });
     });
   }
@@ -1614,7 +1779,7 @@ function paintMap(ctx) {
   document.getElementById("map-turn-filter").innerHTML = usedTurns.length > 1 ? `
     <select class="map-select" id="map-turn" aria-label="대화 고르기">
       <option value="all">모든 질문</option>
-      ${usedTurns.map((t) => `<option value="${t.id}">대화 ${turnNo[t.id]}</option>`).join("")}
+      ${rows.filter((g) => g.turn).map((g) => `<option value="${g.turn.id}">단계 ${g.no} · ${esc(clip(g.stage.title, 20))}</option>`).join("")}
     </select>` : "";
 
   const ptTip = (side, p) => {
@@ -1640,7 +1805,7 @@ function paintMap(ctx) {
           <div class="mm-col mine" data-col="${AREAS.mine}">${g.mine.map((x) => point("mine", x)).join("")}${add("mine", g)}</div>
           <div class="mm-center">
             ${g.turn
-              ? `<button class="mm-q" data-turn="${g.turn.id}" title="${esc(g.turn.question)}"><span class="mm-qno">${turnNo[g.turn.id]}</span><span class="mm-qtext">${esc(shortLinks(g.turn.question))}</span></button>`
+              ? `<button class="mm-q" data-turn="${g.turn.id}" title="${esc(g.stage.title)}"><span class="mm-qno">단계 ${g.no}</span><span class="mm-qtext">${esc(shortLinks(g.stage.title))}</span></button>`
               : `<div class="mm-q manual">직접 추가한 요점</div>`}
             <div class="mm-shared" data-col="${AREAS.shared}">${g.shared.map((x) => point("shared", x)).join("")}${add("shared", g)}</div>
           </div>
