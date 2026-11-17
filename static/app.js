@@ -809,7 +809,7 @@ function renderNotes() {
       <h2>메모함 <span class="np-count" data-notes-count>${openNoteCount()}</span></h2>
       <button class="btn btn-ghost btn-sm np-close" data-np-close aria-label="메모함 닫기" title="메모함 닫기">닫기 ›</button>
     </div>
-    <p class="np-help">AI 답에서 지금 다루지 않을 내용은 <b>문장을 드래그</b>해서 여기에 담아 두세요. 담은 메모는 <b>우선순위</b>를 정하면 높은 것부터 위로 정렬돼요.</p>
+    <p class="np-help">AI 답의 <b>문장을 드래그</b>해서 담아 두세요.</p>
     <div class="np-filters">${chip("all", "전체")}${Object.entries(NOTE_KINDS).map(([k, v]) => chip(k, v)).join("")}</div>
     ${chatCtx.adding ? `
       <form class="np-add" id="np-add">
@@ -1104,7 +1104,7 @@ function turnHTML(t, n, folded = false) {
         ${t.ai_answer ? "" : `<button class="btn btn-primary btn-sm" data-ask>AI 답 보기</button>`}
         <div class="drag-hint" data-drag-hint hidden>
           <span class="dh-icon" aria-hidden="true">✎</span>
-          <span><b>문장을 드래그해서 선택하면</b> 확인할 것·할 일·마음에 드는 것으로 메모함에 담을 수 있어요. <span class="dh-mobile">휴대폰에서는 길게 눌러 선택해요.</span></span>
+          <span>문장을 드래그하면 메모함에 담을 수 있어요<span class="dh-mobile"> (휴대폰은 길게 눌러 선택)</span></span>
           <button class="btn btn-ghost btn-sm" data-drag-hint-off>알겠어요</button>
         </div>
       </section>
@@ -1166,10 +1166,13 @@ function stageHTML(st, no, sts, folded) {
       </header>
       <p class="stage-sum">${st.conclusion ? `<b>결론</b> ${esc(st.conclusion)}` : esc(clip(sts.at(-1)?.question || "", 120))}</p>
       <div class="stage-body">
-        ${sts.map((t, i) => turnHTML(t, i + 1, i < sts.length - 1)).join("")}
+        ${sts.map((t, i) => {
+          const html = turnHTML(t, i + 1, i < sts.length - 1);
+          // 단계 이름이 첫 질문과 같으면 같은 문장이 두 번 나오지 않게 질문 제목은 숨긴다
+          return i === 0 && t.question.trim().slice(0, 80) === st.title.trim() ? html.replace('class="turn ', 'class="turn same-title ') : html;
+        }).join("")}
         <div class="stage-end">
           <div class="stage-concl" data-concl></div>
-          <button class="btn btn-sm stage-ask" data-stage-ask>이 단계에서 이어서 묻기</button>
         </div>
       </div>
     </section>`;
@@ -1197,13 +1200,18 @@ function renderStages(topic, turns, openId) {
   $turns.innerHTML = stages.map((st, i) => stageHTML(st, i + 1, turns.filter((t) => t.stage_id === st.id), st.id !== open)).join("");
   $nav.innerHTML = `
     <span class="sn-label">단계</span>
-    ${stages.map((st, i) => `<button class="sn-item ${st.id === open ? "on" : ""}" data-goto-stage="${st.id}" title="${esc(st.title)}"><span class="sn-no">${i + 1}</span>${esc(clip(shortLinks(st.title), 16))}</button>`).join("")}
+    ${stages.map((st, i) => `<button class="sn-item ${st.id === open ? "on" : ""}" data-goto-stage="${st.id}" title="${esc(st.title)}"><span class="sn-no">${i + 1}</span>${esc(clip(shortLinks(st.title), 12))}</button>`).join("")}
     <button class="sn-item sn-new" data-new-stage>+ 새 단계</button>`;
   turns.forEach((t) => bindTurn(t));
   stages.forEach((st) => bindStage(topic, turns, st));
   $nav.onclick = (e) => {
     const go = e.target.closest("[data-goto-stage]");
-    if (go) { openStage(Number(go.dataset.gotoStage), true); return; }
+    if (go) {
+      const id = Number(go.dataset.gotoStage);
+      openStage(id, true);
+      if (chatCtx.target !== id) { chatCtx.target = id; renderComposer(topic, turns); }  // 입력창도 그 단계로
+      return;
+    }
     if (e.target.closest("[data-new-stage]")) {
       chatCtx.target = "new"; renderComposer(topic, turns);
       document.getElementById("c-question")?.focus();
@@ -1236,10 +1244,6 @@ function bindStage(topic, turns, st) {
       renderStages(topic, turns, st.id);
       renderComposer(topic, turns);
     } catch (err) { toast(err.message); }
-  };
-  $st.querySelector("[data-stage-ask]").onclick = () => {
-    chatCtx.target = st.id; renderComposer(topic, turns);
-    document.getElementById("c-question")?.focus();
   };
   renderConclusion(topic, turns, st);
 }
@@ -1435,10 +1439,10 @@ function renderComposer(topic, turns) {
   const canSkip = target !== "new" && turns.some((x) => x.stage_id === target && x.ai_answer);
   const targetBar = !stages.length ? "" : draft.step === 1 ? `
     <div class="c-target">
-      <label for="c-target">어디에 물을까요</label>
+      <label for="c-target">묻는 곳</label>
       <select id="c-target">
-        ${stages.map((x, i) => `<option value="${x.id}" ${target === x.id ? "selected" : ""}>단계 ${i + 1} · ${esc(clip(shortLinks(x.title), 24))} 에서 이어서</option>`).join("")}
-        <option value="new" ${target === "new" ? "selected" : ""}>＋ 새 단계 시작</option>
+        ${stages.map((x, i) => `<option value="${x.id}" ${target === x.id ? "selected" : ""}>단계 ${i + 1} · ${esc(clip(shortLinks(x.title), 18))}</option>`).join("")}
+        <option value="new" ${target === "new" ? "selected" : ""}>＋ 새 단계</option>
       </select>
       ${target === "new" ? `<input id="c-stage-title" class="c-stage-title" maxlength="80" placeholder="새 단계 이름 (선택, 예: 수치 정하기)" value="${esc(draft.stageTitle || "")}">` : ""}
     </div>` : `<div class="c-target static">${target === "new" ? `＋ 새 단계${draft.stageTitle ? ` · ${esc(draft.stageTitle)}` : ""}` : `단계 ${tNo} · ${esc(clip(shortLinks(stages[tNo - 1].title), 30))} 에서 이어서`}</div>`;
@@ -1461,7 +1465,7 @@ function renderComposer(topic, turns) {
           </label>
           <span class="counter" id="c-qhint">${qHint(draft.question)}</span>
           ${canSkip ? `<button class="btn btn-sm" id="c-quick" ${draft.question.trim() ? "" : "disabled"} title="꼬리 질문은 내 생각을 건너뛰고 바로 물을 수 있어요 (${MOD_KEY}+Enter)">바로 묻기 <kbd>${MOD_KEY}+Enter</kbd></button>` : ""}
-          <button class="btn btn-primary btn-sm" id="c-next" ${draft.question.trim() ? "" : "disabled"}>다음: 내 생각 적기 →</button>
+          <button class="btn btn-primary btn-sm" id="c-next" ${draft.question.trim() ? "" : "disabled"} title="Enter">다음: 내 생각 적기 →</button>
         </div>
       </div>`;
     const $q = document.getElementById("c-question");
