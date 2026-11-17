@@ -1410,3 +1410,76 @@ input[type=text], input[type=search], textarea { font-size: var(--fs-body); padd
   .st-tile { padding: var(--sp-2); }
   .st-value { font-size: 22px; line-height: 30px; }
 }
+
+
+/* ============================================================
+   피드백 반영: 질문 · 내 생각 · AI 답을 구분되는 카드로, AI 답은 읽기 편하게
+   ============================================================ */
+.q-head { display: grid; gap: 4px; margin-bottom: var(--sp-3); }
+.q-tag { font-size: var(--fs-xs); font-weight: 600; color: var(--quiet); letter-spacing: 0.02em; }
+.q-head .turn-q { margin: 0; }
+
+.block { border-left: none; border-radius: var(--r-card); padding: var(--sp-2) var(--sp-3); margin-top: var(--sp-2); }
+.turn-q + .block, .q-head + .block { margin-top: 0; }
+.block-label { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); font-weight: 600; margin-bottom: var(--sp-1); }
+.block-label .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.block-label .label-note { font-weight: 400; font-size: var(--fs-xs); color: var(--quiet); }
+.block.mine { background: var(--mine-tint); border: 1px solid color-mix(in srgb, var(--mine) 25%, transparent); }
+.block.mine .block-label { color: var(--mine); }
+.block.mine .dot { background: var(--mine); }
+.block.mine .block-body { color: var(--text); }
+.block.ai { background: var(--surface); border: 1px solid var(--hairline-strong); padding: var(--sp-3) var(--sp-4); margin-top: var(--sp-3); }
+.block.ai .block-label { color: var(--ai); }
+.block.ai .dot { background: var(--ai); }
+
+/* AI 답 본문: 줄 간격·문단 간격을 넉넉히, 제목은 크기로 위계 */
+.block.ai .md { font-size: var(--fs-body); line-height: 1.8; color: var(--text); max-width: 68ch; }
+.md p { margin: 0 0 12px; }
+.md h1, .md h2 { font-size: 17px; font-weight: 700; margin: 24px 0 8px; line-height: 1.5; color: var(--text); }
+.md h3, .md h4 { font-size: 15.5px; font-weight: 700; margin: 20px 0 6px; line-height: 1.5; color: var(--text); }
+.md ul, .md ol { padding-left: 22px; margin: 0 0 12px; }
+.md li { margin: 4px 0; padding-left: 2px; }
+.md li::marker { color: var(--quiet); }
+.md strong { color: var(--text); font-weight: 700; }
+.md a { color: var(--text); text-decoration: underline; text-decoration-color: var(--ai); text-underline-offset: 3px; word-break: break-all; }
+.md a:hover { color: var(--ai); }
+.md hr { border: none; border-top: 1px solid var(--hairline); margin: 20px 0; }
+.md blockquote { margin: 0 0 12px; padding: 4px 0 4px 14px; border-left: 3px solid var(--hairline-strong); color: var(--muted); }
+.md blockquote p { margin: 4px 0; }
+.md pre { margin: 0 0 12px; font-size: 13px; line-height: 1.6; }
+/* 표: 가로로 넘치면 표만 옆으로 밀어서 보기 */
+.md-table { overflow-x: auto; margin: 4px 0 16px; border: 1px solid var(--hairline-strong); border-radius: var(--r-control); }
+.md table { width: 100%; border-collapse: collapse; font-size: var(--fs-ui); line-height: 1.55; }
+.md th, .md td { padding: 8px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--hairline); }
+.md th { background: var(--raised); font-weight: 600; color: var(--text); white-space: nowrap; }
+.md tr:last-child td { border-bottom: none; }
+.md td + td, .md th + th { border-left: 1px solid var(--hairline); }
+
+/* 드래그 안내 */
+.drag-hint { display: flex; align-items: center; gap: var(--sp-1); margin-top: var(--sp-3); padding: var(--sp-1) var(--sp-2); border-radius: var(--r-control); background: var(--brand-tint); color: var(--text-2); font-size: var(--fs-sm); line-height: 1.6; }
+.drag-hint[hidden] { display: none; }
+.drag-hint b { color: var(--text); }
+.drag-hint .dh-icon { color: var(--brand); font-size: 15px; flex: none; }
+.drag-hint .btn { margin: 0 0 0 auto; flex: none; }
+.dh-mobile { display: none; }
+@media (hover: none) { .dh-mobile { display: inline; } }
+
+/* 마인드맵: 긴 질문·링크가 질문 마디 밖으로 넘치지 않게 4줄까지, 전체는 마우스를 올리면 */
+.mm-center, .mm-col { min-width: 0; }
+.mm-q { overflow: hidden; overflow-wrap: anywhere; word-break: break-word; }
+.mm-qtext { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.mm-node .mm-label { overflow-wrap: anywhere; }
+
+@media (max-width: 760px) {
+  .block.ai { padding: var(--sp-2) var(--sp-3); }
+  .drag-hint { flex-wrap: wrap; }
+}
+
+/* 우선순위: 메모 카드마다 늘 보이는 세 칸 선택 (높음은 산호색, 지금 값은 채워서) */
+.note-pri-row { display: flex; align-items: center; gap: 4px; margin-top: var(--sp-1); }
+.np-label { font-size: var(--fs-xs); color: var(--quiet); margin-right: 2px; }
+.pri-opt { height: 22px; padding: 0 8px; border: 1px solid var(--hairline-strong); border-radius: 999px; background: none; color: var(--muted); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+.pri-opt:hover { border-color: var(--quiet); color: var(--text); }
+.pri-opt.on { background: var(--raised); color: var(--text); border-color: var(--text-2); font-weight: 600; }
+.pri-opt.high.on { background: color-mix(in srgb, var(--shared) 14%, transparent); border-color: var(--shared); color: var(--text); }
+.note.done .note-pri-row { opacity: .6; }

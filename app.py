@@ -98,8 +98,15 @@ SYSTEM_PROMPT = (
     "질문에 한국어로 명확하고 간결하게 답하세요. "
     "결론만 주지 말고, 어떤 관점과 근거로 그렇게 보는지 드러내고, "
     "다르게 볼 수 있는 지점이 있으면 함께 짚어 주세요. "
-    "같은 주제의 이전 질문과 답이 함께 주어지면 그 흐름을 이어서 답하세요."
+    "같은 주제의 이전 질문과 답이 함께 주어지면 그 흐름을 이어서 답하세요. "
+    "질문에 링크가 있으면 web_fetch로 그 페이지를 직접 읽고, 최근 사실이 필요하면 web_search로 찾아 근거로 쓰세요. "
+    "비교가 필요하면 마크다운 표를 써도 되고, 참고한 페이지는 [제목](주소) 링크로 남기세요."
 )
+# AI 답에서 쓸 수 있는 웹 도구 (Anthropic 서버에서 실행). 답 하나에 각각 최대 3번까지 — 비용이 커지지 않게.
+WEB_TOOLS = [
+    {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 3},
+    {"type": "web_search_20260209", "name": "web_search", "max_uses": 3},
+]
 
 
 # ---------- DB ----------
@@ -1233,18 +1240,25 @@ def answer(turn_id):
 
     def claude_stream():
         client = anthropic.Anthropic()
-        with client.beta.messages.stream(
-            model=MODEL,
-            max_tokens=16000,
-            system=SYSTEM_PROMPT,
-            output_config={"effort": "low"},
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-            messages=messages,
-        ) as stream:
-            for text in stream.text_stream:
-                yield text
-            final = stream.get_final_message()
+        msgs = list(messages)
+        # 링크 읽기·검색은 서버 쪽 도구라, 길어지면 중간에 멈춤(pause_turn)으로 돌아올 수 있다 → 이어서 최대 3번
+        for _ in range(3):
+            with client.beta.messages.stream(
+                model=MODEL,
+                max_tokens=16000,
+                system=SYSTEM_PROMPT,
+                output_config={"effort": "low"},
+                betas=["server-side-fallback-2026-07-01"],
+                fallbacks="default",
+                tools=WEB_TOOLS,
+                messages=msgs,
+            ) as stream:
+                for text in stream.text_stream:
+                    yield text
+                final = stream.get_final_message()
+            if final.stop_reason != "pause_turn":
+                break
+            msgs = msgs + [{"role": "assistant", "content": final.content}]
         if final.stop_reason == "refusal":
             yield "\n\n(AI가 이 질문에는 답하지 않았어요.)"
 

@@ -135,30 +135,54 @@ const starBtn = (on, label) =>
   `<button class="star ${on ? "on" : ""}" data-star aria-pressed="${on ? "true" : "false"}" title="${on ? "중요 표시 해제" : "중요 표시"}" aria-label="${esc(label)} 중요 표시">${on ? "★" : "☆"}</button>`;
 
 // 아주 작은 마크다운 렌더러 (먼저 HTML을 이스케이프해서 안전하게)
+// AI 답 마크다운 → HTML. 먼저 전부 이스케이프하고, 정해진 모양만 태그로 바꾼다(링크는 http/https만).
 function md(src) {
   const lines = esc(src).split("\n");
-  let html = "", list = null, inCode = false, code = [];
-  const inline = (s) =>
-    s.replace(/`([^`]+)`/g, "<code>$1</code>")
-     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-     .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
+  let html = "", list = null, inCode = false, code = [], table = [], quote = [];
+  const link = (u, t) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`;
+  const inline = (s) => {
+    const keep = [];
+    const hold = (h) => { keep.push(h); return `\u0000${keep.length - 1}\u0000`; };
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => hold(link(u, t)));
+    s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+?)([.,;:]?)(?=\s|$|\))/g, (_, pre, u, tail) => `${pre}${hold(link(u, u))}${tail}`);
+    s = s.replace(/`([^`]+)`/g, (_, c) => hold(`<code>${c}</code>`))
+         .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+         .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
+    return s.replace(/\u0000(\d+)\u0000/g, (_, i) => keep[Number(i)]);
+  };
   const closeList = () => { if (list) { html += `</${list}>`; list = null; } };
+  const cells = (row) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+  const closeTable = () => {
+    if (!table.length) return;
+    const isSep = (r) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(r);
+    const head = table.length > 1 && isSep(table[1]) ? cells(table[0]) : null;
+    const body = (head ? table.slice(2) : table).filter((r) => !isSep(r));
+    html += `<div class="md-table"><table>${head ? `<thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join("")}</tr></thead>` : ""}<tbody>${body.map((r) => `<tr>${cells(r).map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    table = [];
+  };
+  const closeQuote = () => { if (quote.length) { html += `<blockquote>${quote.map((q) => `<p>${inline(q)}</p>`).join("")}</blockquote>`; quote = []; } };
+  const closeAll = () => { closeList(); closeTable(); closeQuote(); };
   for (const line of lines) {
     if (line.trim().startsWith("```")) {
       if (inCode) { html += `<pre><code>${code.join("\n")}</code></pre>`; code = []; inCode = false; }
-      else { closeList(); inCode = true; }
+      else { closeAll(); inCode = true; }
       continue;
     }
     if (inCode) { code.push(line); continue; }
     let m;
-    if ((m = line.match(/^(#{1,4})\s+(.*)/))) { closeList(); html += `<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`; }
+    if (/^\s*\|.*\|\s*$/.test(line)) { closeList(); closeQuote(); table.push(line); continue; }
+    closeTable();
+    if ((m = line.match(/^&gt;\s?(.*)/))) { closeList(); quote.push(m[1]); continue; }
+    closeQuote();
+    if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) { closeList(); html += "<hr>"; }
+    else if ((m = line.match(/^(#{1,4})\s+(.*)/))) { closeList(); html += `<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`; }
     else if ((m = line.match(/^\s*[-*]\s+(.*)/))) { if (list !== "ul") { closeList(); html += "<ul>"; list = "ul"; } html += `<li>${inline(m[1])}</li>`; }
     else if ((m = line.match(/^\s*\d+\.\s+(.*)/))) { if (list !== "ol") { closeList(); html += "<ol>"; list = "ol"; } html += `<li>${inline(m[1])}</li>`; }
     else if (!line.trim()) { closeList(); }
     else { closeList(); html += `<p>${inline(line)}</p>`; }
   }
   if (inCode) html += `<pre><code>${code.join("\n")}</code></pre>`;
-  closeList();
+  closeAll();
   return html;
 }
 
@@ -756,6 +780,7 @@ function updateNoteBadges() {
 function renderNotes() {
   const $p = document.getElementById("notes-panel");
   if (!$p) return;
+  setTimeout(updateDragHint, 0);  // 메모가 생기면 드래그 안내는 숨긴다
   const { notes, filter, turns } = chatCtx;
   const turnNo = Object.fromEntries(turns.map((t, i) => [t.id, i + 1]));
   const count = (k) => notes.filter((n) => !n.done && (k === "all" || n.kind === k)).length;
@@ -770,7 +795,7 @@ function renderNotes() {
       <h2>메모함 <span class="np-count" data-notes-count>${openNoteCount()}</span></h2>
       <button class="btn btn-ghost btn-sm np-close" data-np-close aria-label="메모함 닫기">닫기</button>
     </div>
-    <p class="np-help">AI 답에서 지금 다루지 않을 내용은 <b>문장을 드래그</b>해서 여기에 담아 두세요. 대화는 원래 주제로 이어 가요.</p>
+    <p class="np-help">AI 답에서 지금 다루지 않을 내용은 <b>문장을 드래그</b>해서 여기에 담아 두세요. 담은 메모는 <b>우선순위</b>를 정하면 높은 것부터 위로 정렬돼요.</p>
     <div class="np-filters">${chip("all", "전체")}${Object.entries(NOTE_KINDS).map(([k, v]) => chip(k, v)).join("")}</div>
     ${chatCtx.adding ? `
       <form class="np-add" id="np-add">
@@ -785,11 +810,14 @@ function renderNotes() {
           <div class="note-top">
             <label class="note-check"><input type="checkbox" ${n.done ? "checked" : ""} data-n-done aria-label="완료"></label>
             <span class="note-kind">${NOTE_KINDS[n.kind]}</span>
-            <button class="note-pri ${n.priority}" data-n-pri title="눌러서 우선순위 바꾸기">${PRIORITY[n.priority]}</button>
             <button class="note-x" data-n-del aria-label="메모 지우기">×</button>
           </div>
           <p class="note-text">${esc(n.text)}</p>
           ${n.note ? `<p class="note-my">${esc(n.note)}</p>` : ""}
+          <div class="note-pri-row" role="group" aria-label="우선순위">
+            <span class="np-label">우선순위</span>
+            ${Object.entries(PRIORITY).map(([k, v]) => `<button class="pri-opt ${k} ${n.priority === k ? "on" : ""}" data-n-pri="${k}" aria-pressed="${n.priority === k}">${v}</button>`).join("")}
+          </div>
           <div class="note-foot">
             ${n.turn_id && turnNo[n.turn_id] ? `<button class="turn-chip" data-n-jump="${n.turn_id}">대화 ${turnNo[n.turn_id]}</button>` : ""}
             <button class="note-link" data-n-note>${n.note ? "메모 고치기" : "메모 달기"}</button>
@@ -828,8 +856,8 @@ function bindNotesPanel() {
       else if (el.closest("[data-np-cancel]")) { chatCtx.adding = false; renderNotes(); }
       else if (el.closest("[data-np-close]")) { toggleNotes(false); }
       else if (el.closest("[data-n-pri]")) {
-        const next = { high: "mid", mid: "low", low: "high" }[note.priority];
-        await saveNote(id, { priority: next });
+        const next = el.closest("[data-n-pri]").dataset.nPri;
+        if (next !== note.priority) await saveNote(id, { priority: next });
       }
       else if (el.closest("[data-n-del]")) {
         if (await ask({ title: "이 메모를 지울까요?", message: note.text.slice(0, 80), confirmText: "지우기", danger: true })) {
@@ -920,6 +948,27 @@ function setupSelectionCapture() {
   window.addEventListener("scroll", () => { $pop.hidden = true; }, { passive: true });
 }
 
+// 긴 주소는 '사이트 이름 링크'로 줄여 보여 준다 (마인드맵 질문 마디처럼 좁은 곳)
+const shortLinks = (s) => String(s).replace(/https?:\/\/(?:www\.)?([^\/\s?#]+)[^\s]*/g, "[$1 링크]");
+
+// ---------- 드래그 안내 ----------
+// 메모함에 담는 방법(문장 드래그)을 잘 모른다는 피드백 → 마지막 AI 답 아래에 한 줄 안내. '알겠어요'를 누르거나 메모를 담으면 사라진다.
+function updateDragHint() {
+  let off = false;
+  try { off = localStorage.getItem("bb-drag-hint") === "off"; } catch { /* 기억 못 해도 괜찮음 */ }
+  const hints = [...document.querySelectorAll("[data-drag-hint]")];
+  hints.forEach((h) => { h.hidden = true; });
+  if (off || (chatCtx.notes || []).length) return;
+  const answered = hints.filter((h) => h.closest(".block.ai")?.querySelector("[data-answer]")?.textContent.trim());
+  const last = answered.at(-1);
+  if (!last) return;
+  last.hidden = false;
+  last.querySelector("[data-drag-hint-off]").onclick = () => {
+    try { localStorage.setItem("bb-drag-hint", "off"); } catch { /* 괜찮음 */ }
+    updateDragHint();
+  };
+}
+
 // ---------- 대화 탭 ----------
 function turnHTML(t, n) {
   return `
@@ -929,16 +978,21 @@ function turnHTML(t, n) {
         <span>${fmtDate(t.created_at)}</span>
         <button class="btn btn-ghost danger btn-sm" data-del-turn>삭제</button>
       </header>
-      <h2 class="turn-q">${esc(t.question)}</h2>
+      <div class="q-head"><span class="q-tag">질문</span><h2 class="turn-q">${esc(t.question)}</h2></div>
       ${t.attachments?.length ? `<div class="turn-files" aria-label="첨부 자료">${t.attachments.map(fileChip).join("")}</div>` : ""}
       <section class="block mine">
-        <div class="block-label">내 생각</div>
+        <div class="block-label"><i class="dot" aria-hidden="true"></i>내 생각</div>
         <div class="block-body">${esc(t.my_thought)}</div>
       </section>
       <section class="block ai">
-        <div class="block-label">AI</div>
+        <div class="block-label"><i class="dot" aria-hidden="true"></i>AI 답</div>
         <div class="md" data-answer>${t.ai_answer ? md(t.ai_answer) : ""}</div>
         ${t.ai_answer ? "" : `<button class="btn btn-primary btn-sm" data-ask>AI 답 보기</button>`}
+        <div class="drag-hint" data-drag-hint hidden>
+          <span class="dh-icon" aria-hidden="true">✎</span>
+          <span><b>문장을 드래그해서 선택하면</b> 확인할 것·할 일·마음에 드는 것으로 메모함에 담을 수 있어요. <span class="dh-mobile">휴대폰에서는 길게 눌러 선택해요.</span></span>
+          <button class="btn btn-ghost btn-sm" data-drag-hint-off>알겠어요</button>
+        </div>
       </section>
       <div class="memo" data-memo ${t.ai_answer ? "" : "hidden"}></div>
     </article>`;
@@ -1062,6 +1116,7 @@ async function streamAnswer(t) {
     const $memo = $turn.querySelector("[data-memo]");
     $memo.hidden = false;
     renderMemo(t);
+    updateDragHint();
   } catch (err) {
     $body.innerHTML = `<p class="err">${esc(err.message)}</p>`;
     if (err.code === "no_ai_access") {
@@ -1420,7 +1475,7 @@ function paintMap(ctx) {
   // 요점 = 가지 끝에 얹힌 글자 (카드 아님). 설명은 툴팁, ⋯에서 '설명 보이기'를 고르면 아래에 작게
   const point = (side, { p, i }) => `
     <button class="mm-node ${side} ${p.kind || ""}" data-side="${side}" data-i="${i}" ${p.turn_ids.length ? `data-turn="${p.turn_ids[0]}"` : ""} ${ptTip(side, p) ? `data-tip="${esc(ptTip(side, p))}"` : ""}>
-      <span class="mm-label">${esc(p.label)}</span>
+      <span class="mm-label">${esc(shortLinks(p.label))}</span>
       ${p.detail ? `<span class="mm-detail">${esc(p.detail)}</span>` : ""}
     </button>`;
   const add = (side, g) => ctx.editing ? `<button class="mm-add" data-add="${side}" data-turns="${g.turn ? g.turn.id : ""}">+ 추가</button>` : "";
@@ -1434,7 +1489,7 @@ function paintMap(ctx) {
           <div class="mm-col mine" data-col="${AREAS.mine}">${g.mine.map((x) => point("mine", x)).join("")}${add("mine", g)}</div>
           <div class="mm-center">
             ${g.turn
-              ? `<button class="mm-q" data-turn="${g.turn.id}" data-tip="누르면 이 대화로 이동"><span class="mm-qno">${turnNo[g.turn.id]}</span>${esc(g.turn.question)}</button>`
+              ? `<button class="mm-q" data-turn="${g.turn.id}" title="${esc(g.turn.question)}"><span class="mm-qno">${turnNo[g.turn.id]}</span><span class="mm-qtext">${esc(shortLinks(g.turn.question))}</span></button>`
               : `<div class="mm-q manual">직접 추가한 요점</div>`}
             <div class="mm-shared" data-col="${AREAS.shared}">${g.shared.map((x) => point("shared", x)).join("")}${add("shared", g)}</div>
           </div>
