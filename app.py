@@ -1603,8 +1603,10 @@ def admin_stats():
                    t.user_id
             FROM turns tu JOIN topics t ON t.id = tu.topic_id
             WHERE t.user_id IN ({qs}) AND tu.is_sample = 0""", uids).fetchall()
-    used_topic_ids = {r["topic_id"] for r in turns}
-    # 주제: 직접 만든 주제 + 예시 주제 중 새 질문을 이어 간 주제
+    real_note_topics = {r[0] for r in db.execute(
+        f"SELECT n.topic_id FROM side_notes n JOIN topics t ON t.id = n.topic_id WHERE t.user_id IN ({qs}) AND n.is_sample = 0", uids)}
+    used_topic_ids = {r["topic_id"] for r in turns} | real_note_topics
+    # 주제: 직접 만든 주제 + 예시 주제 중 새 질문을 이어 가거나 메모를 새로 담은 주제
     topics = [t for t in db.execute(
         f"SELECT id, user_id, status, mindmap, is_sample FROM topics WHERE user_id IN ({qs})", uids)
         if not t["is_sample"] or t["id"] in used_topic_ids]
