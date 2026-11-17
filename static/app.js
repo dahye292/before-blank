@@ -1604,9 +1604,11 @@ async function renderMapTab($panel, topic, turns, refresh = false) {
     <div class="map-page">
       <div class="map-bar">
         <div class="legend" aria-label="범례">
-          <span class="lg"><i class="lg-box"></i>같은 생각</span>
+          <span class="lg"><i class="lg-dot mine"></i>내 생각</span>
+          <span class="lg"><i class="lg-dot ai"></i>AI 생각</span>
+          <span class="lg"><i class="lg-box"></i>겹치는 생각</span>
           <span class="lg"><i class="lg-box similar"></i>비슷한 생각</span>
-          ${tip("가운데가 질문이고, 왼쪽 가지는 내 생각, 오른쪽 가지는 AI 생각, 아래로 내려온 가지는 둘이 겹치는 생각이에요. AI가 정리한 결과라 틀릴 수 있으니, 다르면 '직접 고치기'로 바로잡아 주세요. 요점에 마우스를 올리면 설명이 보이고, 누르면 그 대화로 이동해요.", "마인드맵 안내")}
+          ${tip("가운데가 주제, 큰 가지가 단계, 가지 끝의 색 글자가 요점이에요. 같은 단계에서 여러 번 물어도 그 단계 가지에 모여요. 드래그로 옮기고 + − 버튼(또는 Ctrl+휠)으로 크기를 바꾸고, '크게 보기'로 화면 전체에 펼칠 수 있어요. AI가 정리한 결과라 틀릴 수 있으니, 다르면 '직접 고치기'로 바로잡아 주세요. 요점에 마우스를 올리면 설명이 보이고, 누르면 그 대화로 이동해요.", "마인드맵 안내")}
           <span id="map-badges"></span>
         </div>
         <div class="map-tools">
@@ -1626,7 +1628,7 @@ async function renderMapTab($panel, topic, turns, refresh = false) {
       <div id="map-materials"></div>
       <div id="map-area"><div class="map-loading">대화 전체에서 내 생각과 AI 답의 핵심을 정리하는 중…</div></div>
     </div>`;
-  const ctx = { topic, turns, data: null, editing: false, turnNo: Object.fromEntries(turns.map((t, i) => [t.id, i + 1])) };
+  const ctx = { topic, turns, data: null, editing: false, full: false, turnNo: Object.fromEntries(turns.map((t, i) => [t.id, i + 1])) };
   const $more = document.getElementById("map-more"), $moreMenu = document.getElementById("map-more-menu");
   const closeMore = () => { $moreMenu.hidden = true; $more.setAttribute("aria-expanded", "false"); };
   $more.onclick = (e) => { e.stopPropagation(); $moreMenu.hidden = !$moreMenu.hidden; $more.setAttribute("aria-expanded", String(!$moreMenu.hidden)); };
@@ -1800,6 +1802,29 @@ function paintMap(ctx) {
     </button>`;
   const add = (side, g) => ctx.editing ? `<button class="mm-add" data-add="${side}" data-turns="${g.turn ? g.turn.id : ""}">+ 추가</button>` : "";
 
+  // 보기 모드: 주제를 가운데 둔 마인드맵 (확대·축소·이동). 고치기 모드만 아래의 목록형을 쓴다
+  if (!ctx.editing) {
+    const apply = () => {
+      const $turnSel = document.getElementById("map-turn");
+      if ($turnSel) $turnSel.value = view.turns ? String(view.turns[0]) : "all";
+      const $detail = document.getElementById("mv-compact");
+      $detail.hidden = false;
+      $detail.textContent = view.showDetail ? "설명 숨기기" : "설명 보이기";
+      saveMapView(topic.id, view);
+      paintRadial(ctx, rows, point, view, jump);
+    };
+    ctx.apply = apply; ctx.redraw = null;
+    const $turnSel = document.getElementById("map-turn");
+    if ($turnSel) $turnSel.onchange = () => { view.turns = $turnSel.value === "all" ? null : [Number($turnSel.value)]; apply(); };
+    document.getElementById("mv-compact").onclick = () => {
+      view.showDetail = !view.showDetail;
+      document.getElementById("map-more-menu").hidden = true;
+      apply();
+    };
+    apply();
+    return;
+  }
+
   document.getElementById("map-area").innerHTML = `
     <div class="mm ${ctx.editing ? "editing" : ""}" id="cmap">
       <svg class="mm-lines" aria-hidden="true"></svg>
@@ -1864,6 +1889,234 @@ function paintMap(ctx) {
   if (resizeObs) resizeObs.disconnect();
   resizeObs = new ResizeObserver(redraw);
   resizeObs.observe($map);
+}
+
+// ---- 마인드맵 보기: 주제가 가운데, 단계가 양옆 큰 가지, 요점이 그 끝의 잔가지 ----
+// 같은 단계에서 여러 번 물어도 그 단계 가지만 굵어진다. 드래그로 이동, 버튼·Ctrl+휠·두 손가락으로 확대·축소
+function paintRadial(ctx, rows, point, view, jump) {
+  const $area = document.getElementById("map-area");
+  const sel = view.turns ? String(view.turns[0]) : null;
+  const shown = rows.filter((g) => !sel || (g.turn && String(g.turn.id) === sel));
+  const SIDES = ["shared", "mine", "ai"];
+  $area.innerHTML = `
+    <div class="mmr-wrap ${ctx.full ? "full" : ""}" id="mmr-wrap">
+      <div class="mmr-view" id="mmr-view" tabindex="0" aria-label="마인드맵. 드래그로 옮기고 확대·축소 버튼으로 크기를 바꿔요">
+        <div class="mmr-world ${view.showDetail ? "show-detail" : ""}" id="mmr-world">
+          <svg class="mmr-lines" aria-hidden="true"></svg>
+          <div class="mmr-root">${esc(clip(shortLinks(ctx.topic.name || ""), 60))}</div>
+          ${shown.map((g, gi) => `
+            <button class="mmr-stage" data-k="s${gi}" ${g.turn ? `data-turn="${g.turn.id}" title="${esc(g.stage.title)}"` : ""}>
+              ${g.turn ? `<span class="mm-qno">단계 ${g.no}</span>${esc(clip(shortLinks(g.stage.title), 60))}` : `<span class="mm-qno">따로</span>직접 추가한 요점`}
+            </button>
+            ${SIDES.flatMap((side) => g[side].map((x) => point(side, x).replace('class="mm-node', `data-g="${gi}" class="mmr-leaf mm-node`))).join("")}`).join("")}
+        </div>
+      </div>
+      <p class="mmr-hint" aria-hidden="true">드래그로 이동 · ${matchMedia("(pointer: coarse)").matches ? "두 손가락으로 확대" : "Ctrl+휠로 확대"}</p>
+      <div class="mmr-ctrl" role="toolbar" aria-label="마인드맵 크기">
+        <button type="button" data-z="out" title="축소" aria-label="축소">−</button>
+        <button type="button" data-z="fit" class="mmr-pct" title="화면에 맞추기">100%</button>
+        <button type="button" data-z="in" title="확대" aria-label="확대">+</button>
+        <button type="button" data-z="full" class="mmr-full">${ctx.full ? "닫기" : "크게 보기"}</button>
+      </div>
+    </div>`;
+  document.body.classList.toggle("mmr-lock", !!ctx.full);
+  if (!paintRadial.bound) {  // 크게 보기 중에 다른 화면으로 가면 스크롤 잠금을 푼다
+    paintRadial.bound = true;
+    window.addEventListener("hashchange", () => document.body.classList.remove("mmr-lock"));
+  }
+
+  const $wrap = document.getElementById("mmr-wrap"), $view = document.getElementById("mmr-view"), $world = document.getElementById("mmr-world");
+  const svg = $world.querySelector(".mmr-lines");
+  // 소수점 폭을 내림하면 글자가 한 줄 더 접히므로 올림해서 잰다 (재는 동안은 확대·축소를 풀어 둔다)
+  const box = (el) => { const r = el.getBoundingClientRect(); return { el, w: Math.ceil(r.width) + 1, h: Math.ceil(r.height), x: 0, y: 0 }; };
+
+  // ---- 배치: 단계는 순서대로, 높이가 덜 찬 쪽(오른쪽 먼저)에. 좁은 화면은 모두 오른쪽 ----
+  const W = { size: { w: 0, h: 0 } };
+  const layout = () => {
+    const narrow = $view.clientWidth < 640;
+    // 넓은 판 위에서 재야 글자가 최소 폭으로 접히지 않는다. 잰 폭은 고정해서 배치 후에도 그대로
+    $world.style.width = "6000px"; $world.style.height = "6000px"; $world.style.transform = "none";
+    $world.querySelectorAll(".mmr-root, .mmr-stage, .mmr-leaf").forEach((el) => { el.style.width = ""; });
+    const root = box($world.querySelector(".mmr-root"));
+    const groups = shown.map((g, gi) => ({
+      stage: box($world.querySelector(`[data-k="s${gi}"]`)),
+      leaves: [...$world.querySelectorAll(`.mmr-leaf[data-g="${gi}"]`)].map(box),
+    }));
+    const LG = 10, BG = 30, X1 = narrow ? 40 : 72, X2 = narrow ? 30 : 52, PAD = 40;
+    const tot = { R: 0, L: 0 }, col = { R: [], L: [] };
+    groups.forEach((g) => {
+      g.lh = g.leaves.reduce((s, l) => s + l.h, 0) + Math.max(0, g.leaves.length - 1) * LG;
+      g.h = Math.max(g.stage.h, g.lh);
+      g.side = narrow || tot.R <= tot.L ? "R" : "L";
+      col[g.side].push(g); tot[g.side] += g.h + BG;
+    });
+    root.x = narrow ? 0 : -root.w / 2; root.y = -root.h / 2;
+    // 좁은 화면: 옆으로 뻗으면 잘리므로 주제 아래로 단계, 단계 아래로 요점이 내려가는 나무 모양
+    if (narrow) {
+      root.x = 0; root.y = 0;
+      let y = root.h + 22;
+      groups.forEach((g) => {
+        g.side = "R"; g.stage.x = 22; g.stage.y = y; y += g.stage.h + 10;
+        g.leaves.forEach((l) => { l.x = 50; l.y = y; y += l.h + 8; l.el.classList.remove("L"); });
+        y += 18;
+      });
+    }
+    for (const s of narrow ? [] : ["R", "L"]) {
+      let y = -(tot[s] - BG) / 2;
+      col[s].forEach((g) => {
+        const cy = y + g.h / 2;
+        g.stage.x = s === "R" ? root.x + root.w + X1 : root.x - X1 - g.stage.w;
+        g.stage.y = cy - g.stage.h / 2;
+        let ly = cy - g.lh / 2;
+        g.leaves.forEach((l) => {
+          l.x = s === "R" ? g.stage.x + g.stage.w + X2 : g.stage.x - X2 - l.w;
+          l.y = ly; ly += l.h + LG;
+          l.el.classList.toggle("L", s === "L");
+        });
+        y += g.h + BG;
+      });
+    }
+    const all = [root, ...groups.flatMap((g) => [g.stage, ...g.leaves])];
+    const minX = Math.min(...all.map((b) => b.x)) - PAD, minY = Math.min(...all.map((b) => b.y)) - PAD;
+    const maxX = Math.max(...all.map((b) => b.x + b.w)) + PAD, maxY = Math.max(...all.map((b) => b.y + b.h)) + PAD + 30;  // 아래 버튼에 가리지 않게
+    all.forEach((b) => { b.x -= minX; b.y -= minY; Object.assign(b.el.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px` }); });
+    W.size = { w: maxX - minX, h: maxY - minY };
+    $world.style.width = `${W.size.w}px`; $world.style.height = `${W.size.h}px`;
+    svg.setAttribute("width", W.size.w); svg.setAttribute("height", W.size.h);
+
+    // ---- 가지: 주제→단계는 굵은 줄기, 단계→요점은 색 잔가지(요점 글자 밑줄 끝에 닿는다) ----
+    const curve = (x1, y1, x2, y2) => { const k = (x2 - x1) / 2; return `M${x1},${y1} C${x1 + k},${y1} ${x2 - k},${y2} ${x2},${y2}`; };
+    let d = "";
+    // 꺾인 가지(좁은 화면): 위에서 내려오다 둥글게 꺾여 오른쪽 마디에 닿는다
+    const elbow = (x, y1, x2, y2) => `M${x},${y1} L${x},${y2 - 8} Q${x},${y2} ${x + 8},${y2} L${x2},${y2}`;
+    if (narrow) {
+      groups.forEach((g) => {
+        const st = g.stage;
+        d += `<path class="l-stage" d="${elbow(root.x + 12, root.y + root.h, st.x, st.y + st.h / 2)}"/>`;
+        g.leaves.forEach((l) => {
+          const n = l.el, side = n.dataset.side;
+          d += `<path class="l-${side}${n.classList.contains("similar") ? " similar" : ""}" data-for="${side}-${n.dataset.i}" d="${elbow(st.x + 14, st.y + st.h, l.x, side === "shared" ? l.y + l.h / 2 : l.y + l.h - 1)}"/>`;
+        });
+      });
+      svg.innerHTML = d;
+      return narrow;
+    }
+    groups.forEach((g) => {
+      const R = g.side === "R", st = g.stage;
+      const sy = st.y + st.h / 2;
+      d += `<path class="l-stage" d="${curve(R ? root.x + root.w : root.x, root.y + root.h / 2, R ? st.x : st.x + st.w, sy)}"/>`;
+      g.leaves.forEach((l) => {
+        const n = l.el, side = n.dataset.side, shared = side === "shared";
+        const ly = shared ? l.y + l.h / 2 : l.y + l.h - 1;
+        d += `<path class="l-${side}${n.classList.contains("similar") ? " similar" : ""}" data-for="${side}-${n.dataset.i}" d="${curve(R ? st.x + st.w : st.x, sy, R ? l.x : l.x + l.w, ly)}"/>`;
+      });
+    });
+    svg.innerHTML = d;
+    return narrow;
+  };
+
+  // ---- 확대·축소·이동 ----
+  const cam = { s: 1, x: 0, y: 0 };
+  const $pct = $wrap.querySelector(".mmr-pct");
+  const paint = () => {
+    $world.style.transform = `translate(${cam.x}px, ${cam.y}px) scale(${cam.s})`;
+    $pct.textContent = `${Math.round(cam.s * 100)}%`;
+  };
+  const clampS = (s) => Math.min(2.5, Math.max(0.2, s));
+  const fit = () => {
+    const narrow = layout();
+    const vw = $view.clientWidth, vh = $view.clientHeight;
+    const byW = vw / W.size.w, both = Math.min(byW, vh / W.size.h);
+    // 좁은 화면에서 전체를 넣으면 글자가 너무 작아져서, 폭에만 맞추고 위에서부터 보여 준다
+    cam.s = clampS(Math.min(1, narrow && both < 0.6 ? Math.max(byW, 0.6) : both));
+    cam.x = Math.max(0, (vw - W.size.w * cam.s) / 2);
+    cam.y = W.size.h * cam.s <= vh ? (vh - W.size.h * cam.s) / 2 : 0;
+    if (W.size.w * cam.s > vw) cam.x = 0;
+    paint();
+  };
+  const zoomAt = (f, px = $view.clientWidth / 2, py = $view.clientHeight / 2) => {
+    const ns = clampS(cam.s * f);
+    cam.x = px - (px - cam.x) * (ns / cam.s);
+    cam.y = py - (py - cam.y) * (ns / cam.s);
+    cam.s = ns; paint();
+  };
+
+  $wrap.querySelector(".mmr-ctrl").onclick = (e) => {
+    const z = e.target.closest("[data-z]")?.dataset.z;
+    if (z === "in") zoomAt(1.25);
+    else if (z === "out") zoomAt(0.8);
+    else if (z === "fit") fit();
+    else if (z === "full") { ctx.full = !ctx.full; paintRadial(ctx, rows, point, view, jump); }
+  };
+  $view.addEventListener("wheel", (e) => {
+    if (!ctx.full && !e.ctrlKey && !e.metaKey) return;  // 평소엔 페이지 스크롤을 막지 않는다
+    e.preventDefault();
+    const r = $view.getBoundingClientRect();
+    zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+  $view.onkeydown = (e) => {
+    if (e.key === "+" || e.key === "=") zoomAt(1.25);
+    else if (e.key === "-") zoomAt(0.8);
+    else if (e.key === "0") fit();
+    else if (e.key === "Escape" && ctx.full) { ctx.full = false; paintRadial(ctx, rows, point, view, jump); }
+    else return;
+    e.preventDefault();
+  };
+
+  // 드래그 이동 + 두 손가락 확대. 조금이라도 움직였으면 손을 뗄 때의 클릭(대화로 이동)은 무시
+  const pts = new Map();
+  let start = null, moved = false, pinch = null;
+  $view.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    moved = false;
+    if (pts.size === 1) start = { x: e.clientX, y: e.clientY, cx: cam.x, cy: cam.y };
+    if (pts.size === 2) {
+      const [a, b] = [...pts.values()];
+      pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), s: cam.s };
+    }
+  });
+  $view.addEventListener("pointermove", (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 2 && pinch) {
+      const [a, b] = [...pts.values()], r = $view.getBoundingClientRect();
+      zoomAt(clampS(pinch.s * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d) / cam.s, (a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top);
+      moved = true;
+      return;
+    }
+    if (!start) return;
+    const dx = e.clientX - start.x, dy = e.clientY - start.y;
+    if (!moved && Math.hypot(dx, dy) < 5) return;
+    if (!moved) { moved = true; $view.classList.add("panning"); $view.setPointerCapture(e.pointerId); }
+    cam.x = start.cx + dx; cam.y = start.cy + dy; paint();
+  });
+  const end = (e) => {
+    pts.delete(e.pointerId);
+    if (pts.size < 2) pinch = null;
+    if (!pts.size) { start = null; $view.classList.remove("panning"); }
+  };
+  $view.addEventListener("pointerup", end);
+  $view.addEventListener("pointercancel", end);
+  $view.addEventListener("click", (e) => {
+    if (moved) { e.stopPropagation(); e.preventDefault(); moved = false; return; }
+    const t = e.target.closest("[data-turn]");
+    if (t) jump(t.dataset.turn);
+  }, true);
+  // 요점에 마우스를 올리면 그 가지만 진하게
+  $world.addEventListener("mouseover", (e) => {
+    const n = e.target.closest(".mm-node");
+    svg.querySelectorAll("path.hl").forEach((x) => x.classList.remove("hl"));
+    if (n) svg.querySelector(`path[data-for="${n.dataset.side}-${n.dataset.i}"]`)?.classList.add("hl");
+  });
+
+  fit();
+  if (ctx.full) $view.focus();
+  // 화면 폭이 바뀌면 다시 맞춘다 (높이만 바뀐 건 무시)
+  if (resizeObs) resizeObs.disconnect();
+  let lastW = $view.clientWidth;
+  resizeObs = new ResizeObserver(() => { if (document.body.contains($view) && $view.clientWidth !== lastW) { lastW = $view.clientWidth; fit(); } });
+  resizeObs.observe($view);
 }
 
 // 가지 그리기: 질문 마디에서 왼쪽(내 생각)·오른쪽(AI 생각)·아래(겹치는 생각)로 곡선.

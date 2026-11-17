@@ -1683,3 +1683,62 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 .note-foot .turn-chip { border: none; padding: 0; color: var(--quiet); }
 .turn.same-title:not(.folded) .q-head { display: none; }
 .turn.same-title .turn-meta { margin-top: -4px; }
+
+/* ---- 마인드맵 보기: 주제가 가운데, 단계가 양옆 큰 가지, 요점이 잔가지 (확대·축소·이동) ---- */
+.legend i.lg-dot { width: 8px; height: 8px; border: none; border-radius: 50%; margin: 0; }
+.legend i.lg-dot.mine { background: var(--mine); }
+.legend i.lg-dot.ai { background: var(--ai); }
+.mmr-wrap { position: relative; border: 1px solid var(--hairline); border-radius: var(--r-card); background: var(--bg); overflow: hidden; }
+.mmr-view { position: relative; height: clamp(380px, 66vh, 760px); overflow: hidden; cursor: grab; touch-action: none; outline: none; user-select: none; -webkit-user-select: none; }
+.mmr-view:focus-visible { box-shadow: inset 0 0 0 1px var(--ai); }
+.mmr-view.panning, .mmr-view.panning * { cursor: grabbing !important; }
+.mmr-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.mmr-world > * { position: absolute; left: 0; top: 0; }
+.mmr-lines { overflow: visible; pointer-events: none; }
+.mmr-lines path { fill: none; stroke-linecap: round; stroke-width: 1.5; opacity: .75; transition: opacity .12s, stroke-width .12s; }
+.mmr-lines .l-stage { stroke: var(--quiet); stroke-width: 2.5; opacity: .55; }
+.mmr-lines .l-mine { stroke: var(--mine); }
+.mmr-lines .l-ai { stroke: var(--ai); }
+.mmr-lines .l-shared { stroke: var(--shared); }
+.mmr-lines .similar { stroke-dasharray: 4 4; }
+.mmr-lines path.hl { opacity: 1; stroke-width: 2.5; }
+.mmr-root {
+  max-width: 220px; padding: 12px 18px; border-radius: 14px; background: var(--text); color: var(--bg);
+  font-family: var(--serif); font-size: 17px; font-weight: 700; line-height: 24px; text-align: center; word-break: keep-all;
+}
+.mmr-stage {
+  width: max-content; max-width: 210px; padding: 8px 12px; border: 1.5px solid var(--hairline-strong); border-radius: var(--r-card);
+  background: var(--surface); color: var(--text); font-family: var(--serif); font-size: 15px; font-weight: 700; line-height: 22px;
+  text-align: left; cursor: pointer; word-break: keep-all;
+}
+.mmr-stage:hover { border-color: var(--text-2); }
+.mmr-stage .mm-qno { font-family: var(--font); }
+.mmr-leaf { width: max-content; max-width: 230px; text-align: left; word-break: keep-all; }
+.mmr-leaf.L { text-align: right; }
+.mmr-leaf.shared { text-align: center; }
+.mmr-world .mm-detail { max-width: 230px; }
+.mmr-world.show-detail .mm-detail { display: block; }
+.mmr-world [data-tip]:hover::after, .mmr-world [data-tip]:focus-visible::after { white-space: pre-line; }
+.mmr-leaf.L[data-tip]:hover::after, .mmr-leaf.L[data-tip]:focus-visible::after { left: auto; right: 0; }
+.mmr-hint { position: absolute; left: 12px; bottom: 12px; margin: 0; font-size: var(--fs-xs); color: var(--quiet); pointer-events: none; }
+.mmr-ctrl {
+  position: absolute; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 2px; padding: 3px;
+  background: var(--surface); border: 1px solid var(--hairline-strong); border-radius: 10px; box-shadow: 0 2px 10px rgba(0, 0, 0, .08);
+}
+.mmr-ctrl button { min-width: 32px; height: 30px; padding: 0 8px; border: none; border-radius: 7px; background: none; color: var(--text-2); font: inherit; font-size: 13px; cursor: pointer; }
+.mmr-ctrl button:hover { background: var(--raised); color: var(--text); }
+.mmr-ctrl [data-z="in"], .mmr-ctrl [data-z="out"] { font-size: 17px; }
+.mmr-pct { min-width: 52px !important; font-variant-numeric: tabular-nums; }
+.mmr-full { margin-left: 2px; border-left: 1px solid var(--hairline) !important; border-radius: 0 7px 7px 0 !important; font-weight: 600; }
+.mmr-wrap.full { position: fixed; inset: 0; z-index: 90; border: none; border-radius: 0; }
+.mmr-wrap.full .mmr-view { height: 100vh; height: 100dvh; }
+body.mmr-lock { overflow: hidden; }
+@media (max-width: 640px) {
+  .mmr-hint { display: none; }
+  .mmr-view { height: clamp(360px, 62vh, 640px); }
+}
+@media (max-width: 640px) {
+  .mmr-stage { max-width: 280px; }
+  .mmr-leaf { max-width: 260px; }
+  .mmr-root { max-width: 300px; text-align: left; }
+}
