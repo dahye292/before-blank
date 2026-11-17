@@ -1534,3 +1534,4 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 /* Caps Lock 안내 */
 .caps-hint { display: block; margin-top: 4px; font-size: var(--fs-xs); font-weight: 600; color: var(--shared); }
 .caps-hint[hidden] { display: none; }
+.turn.follow .q-tag, .turn.follow .ts-tag { color: var(--quiet); }

@@ -1059,7 +1059,7 @@ function turnHTML(t, n, folded = false) {
   return `
     <article class="turn ${folded ? "folded" : ""} ${n > 1 ? "follow" : ""}" id="turn-${t.id}" data-id="${t.id}">
       <button class="turn-sum" data-unfold aria-expanded="false" title="눌러서 펼치기">
-        <span class="ts-tag">${n > 1 ? "이어서 물음" : "질문"}</span>
+        <span class="ts-tag">질문</span>
         <span class="ts-q">${esc(t.question)}</span>
         <span class="ts-a">${esc(answerPreview(t))}</span>
         <span class="ts-more" aria-hidden="true">펼치기 ▾</span>
@@ -1069,7 +1069,7 @@ function turnHTML(t, n, folded = false) {
         <button class="btn btn-ghost btn-sm" data-fold>접기 ▴</button>
         <button class="btn btn-ghost danger btn-sm" data-del-turn>삭제</button>
       </header>
-      <div class="q-head"><span class="q-tag">${n > 1 ? "이어서 물음" : "질문"}</span><h2 class="turn-q">${esc(t.question)}</h2></div>
+      <div class="q-head"><span class="q-tag">질문</span><h2 class="turn-q">${esc(t.question)}</h2></div>
       ${t.attachments?.length ? `<div class="turn-files" aria-label="첨부 자료">${t.attachments.map(fileChip).join("")}</div>` : ""}
       ${t.my_thought ? `<section class="block mine">
         <div class="block-label"><i class="dot" aria-hidden="true"></i>내 생각</div>
