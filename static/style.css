@@ -1546,3 +1546,18 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 }
 .notes-toggle[aria-pressed="true"] { background: var(--raised); border-color: var(--text-2); color: var(--text); }
 .notes-toggle span { font-weight: 600; }
+
+/* 메모함이 닫혀 있을 때: 화면 오른쪽 끝에 붙는 얇은 세로 탭 (메모함이 있다는 걸 잊지 않게, 누르면 열림) */
+.np-edge { display: none; }
+@media (min-width: 1101px) {
+  .chat-wrap.notes-closed .np-edge {
+    position: fixed; right: 0; top: 50%; transform: translateY(-50%); z-index: 20;
+    display: flex; flex-direction: column; align-items: center; gap: var(--sp-1);
+    padding: var(--sp-2) 6px; border: 1px solid var(--hairline-strong); border-right: none; border-radius: var(--r-card) 0 0 var(--r-card);
+    background: var(--surface); color: var(--text-2); font: inherit; font-size: var(--fs-sm); font-weight: 600; cursor: pointer;
+    box-shadow: -4px 0 12px rgba(0, 0, 0, .06); transition: padding .15s, color .15s;
+  }
+  .chat-wrap.notes-closed .np-edge:hover { padding-right: 10px; color: var(--text); border-color: var(--brand); }
+  .np-edge-label { writing-mode: vertical-rl; letter-spacing: 0.1em; }
+  .np-edge-count { min-width: 20px; height: 20px; padding: 0 5px; border-radius: 999px; background: var(--brand); color: var(--on-brand); font-size: var(--fs-xs); display: grid; place-items: center; }
+}

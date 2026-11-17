@@ -1128,6 +1128,7 @@ function renderChatTab($panel, topic, turns, opts) {
       <div class="composer" id="composer"></div>
     </div>
     <aside class="notes-panel" id="notes-panel" aria-label="메모함"></aside>
+    <button class="np-edge" id="np-edge" title="메모함 열기" aria-label="메모함 열기"><span class="np-edge-label">메모함</span><span class="np-edge-count" data-notes-count>0</span></button>
    </div>`;
 
   turns.forEach((t) => bindTurn(t));
@@ -1136,6 +1137,7 @@ function renderChatTab($panel, topic, turns, opts) {
   bindNotesPanel();
   setupSelectionCapture();
   document.getElementById("notes-toggle")?.addEventListener("click", () => toggleNotes());
+  document.getElementById("np-edge").onclick = () => toggleNotes(true);  // 닫혀 있을 때 오른쪽 끝의 얇은 탭
   if (wideNotes()) {  // 넓은 화면: 지난번에 접어 두었으면 접힌 채로 시작
     document.querySelector(".chat-wrap").classList.toggle("notes-closed", !notesPref());
     syncNotesBtn(notesPref());
