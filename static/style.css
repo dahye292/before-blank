@@ -1483,3 +1483,46 @@ input[type=text], input[type=search], textarea { font-size: var(--fs-body); padd
 .pri-opt.on { background: var(--raised); color: var(--text); border-color: var(--text-2); font-weight: 600; }
 .pri-opt.high.on { background: color-mix(in srgb, var(--shared) 14%, transparent); border-color: var(--shared); color: var(--text); }
 .note.done .note-pri-row { opacity: .6; }
+
+/* ============================================================
+   한 주제 = 끊기지 않는 하나의 대화: '대화 01' 머리 없이 이어지고, 지난 질문은 한 줄로 접힘
+   ============================================================ */
+.turn { border-bottom: none; padding: var(--sp-3) 0; }
+.turn + .turn { border-top: 1px dashed var(--hairline); }
+.turn-meta { justify-content: flex-end; min-height: 0; margin-bottom: 4px; }
+.turn-meta > span { margin-right: auto; }
+.turn-meta .btn { margin-left: 0; }
+.turn.follow .q-tag { color: var(--ai); }
+/* 접힌 질문: 질문 한 줄 + AI 답 첫 줄, 누르면 펼침 */
+.turn-sum { display: none; width: 100%; text-align: left; border: 1px solid var(--hairline); border-radius: var(--r-card); background: var(--surface); padding: var(--sp-2) var(--sp-3); cursor: pointer; font: inherit; color: var(--text); gap: 2px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: baseline; column-gap: var(--sp-2); }
+.turn-sum:hover { border-color: var(--hairline-strong); background: var(--hover); }
+.turn.folded { padding: 4px 0; border-top: none; }
+.turn.folded > :not(.turn-sum) { display: none !important; }
+.turn.folded .turn-sum { display: grid; }
+.ts-tag { font-size: var(--fs-xs); font-weight: 600; color: var(--quiet); white-space: nowrap; }
+.turn.follow .ts-tag { color: var(--ai); }
+.ts-q { font-family: var(--serif); font-weight: 700; font-size: var(--fs-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ts-more { font-size: var(--fs-xs); color: var(--quiet); white-space: nowrap; }
+.ts-a { grid-column: 2 / 4; font-size: var(--fs-sm); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ts-a:empty { display: none; }
+
+/* 홈: 예시 주제 숨기기 */
+.side-toggle { display: flex; align-items: center; gap: 6px; margin-top: var(--sp-2); padding: 0 var(--sp-2); font-size: var(--fs-sm); color: var(--muted); cursor: pointer; }
+.side-toggle input { accent-color: var(--brand); }
+@media (max-width: 760px) { .side-toggle { margin: 0; padding: 0 4px; white-space: nowrap; flex: none; } }
+
+/* 사용법 안내 */
+.guide-backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: var(--sp-3); background: rgba(18, 19, 20, .4); }
+.guide { width: min(560px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; background: var(--surface); border: 1px solid var(--hairline-strong); border-radius: 12px; padding: var(--sp-5); box-shadow: 0 16px 48px rgba(0, 0, 0, .2); }
+.guide h2 { margin: 0; font-family: var(--serif); font-size: var(--fs-lead); }
+.guide-lead { margin: var(--sp-1) 0 var(--sp-4); color: var(--muted); font-size: var(--fs-ui); }
+.guide-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-3); }
+.guide-steps li { display: grid; grid-template-columns: 32px 1fr; }
+.g-no { font-family: var(--mono); font-size: var(--fs-xs); color: var(--brand); padding-top: 3px; }
+.guide-steps b { font-size: var(--fs-body); }
+.guide-steps p { margin: 4px 0 0; font-size: var(--fs-ui); line-height: 1.65; color: var(--text-2); }
+.guide-steps .g-why { color: var(--muted); font-size: var(--fs-sm); }
+.g-why span { font-weight: 600; color: var(--brand); margin-right: 4px; }
+.guide-btns { display: flex; justify-content: flex-end; margin-top: var(--sp-4); }
+@media (max-width: 760px) { .guide { padding: var(--sp-4); } }
+.ts-more { grid-row: 1; grid-column: 3; } .ts-tag { grid-row: 1; grid-column: 1; } .ts-q { grid-row: 1; grid-column: 2; } .ts-a { grid-row: 2; }

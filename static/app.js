@@ -12,6 +12,7 @@ const state = {
   filter: "all",      // all | starred | in_progress | done
   folder: "all",      // all | none(폴더 없음) | 폴더 id
   doneOpen: false,    // 홈의 '완료' 구역을 펼쳤는지
+  hideSamples: (() => { try { return localStorage.getItem("bb-hide-samples") === "1"; } catch { return false; } })(),
   folders: null,
   drafts: {},         // 주제별 작성 중인 질문/생각 (탭을 오가도 유지)
   user: undefined,    // 로그인한 사람 (undefined: 아직 모름, null: 로그인 안 함)
@@ -238,6 +239,7 @@ function topBar() {
           </button>
           <div class="profile-menu" id="profile-menu" role="menu" hidden>
             ${state.user?.admin ? `<a role="menuitem" href="#/stats">사용 통계</a>` : ""}
+            <button role="menuitem" id="guide-open">사용법</button>
             <a role="menuitem" href="#/settings">설정</a>
             <button role="menuitem" id="logout">로그아웃</button>
           </div>
@@ -256,6 +258,7 @@ function bindTopBar() {
     document.addEventListener("keydown", (e) => { if (e.key === "Escape") shut(); });
   }
   document.getElementById("logout").onclick = logout;
+  document.getElementById("guide-open").onclick = () => { document.getElementById("profile-menu").hidden = true; showGuide(); };
 }
 
 async function viewHome() {
@@ -280,6 +283,7 @@ async function viewHome() {
     timer = setTimeout(() => { state.q = e.target.value.trim(); loadTopicRows(); }, 250);
   });
   await loadTopicRows();
+  maybeShowGuide();  // 처음 들어온 사람에게 사용법을 한 번 보여 준다
 }
 
 // "어제 '주제'에서 '마지막 질문'을 고민하다 멈췄어요. 이어서 생각해 볼까요?"
@@ -304,10 +308,12 @@ function renderResume(all) {
 }
 
 async function loadTopicRows() {
-  const [all, folders] = await Promise.all([
+  const [allTopics, folders] = await Promise.all([
     api(`/api/topics?${new URLSearchParams({ q: state.q })}`),
     api("/api/folders"),
   ]);
+  // '예시 주제 숨기기'를 켜면 가입 때 들어온 예시 주제를 빼고 내가 만든 주제만
+  const all = state.hideSamples ? allTopics.filter((t) => !t.is_sample) : allTopics;
   state.folders = folders;
   const $area = document.getElementById("topic-area");
   if (!$area) return;
@@ -327,7 +333,14 @@ async function loadTopicRows() {
       ${folders.map((f) => fitem(f.id, f.name)).join("")}
       ${fitem("none", "폴더 없음")}
     </ul>
-    <button class="side-add" id="folder-add">+ 새 폴더</button>`;
+    <button class="side-add" id="folder-add">+ 새 폴더</button>
+    ${allTopics.some((t) => t.is_sample) ? `<label class="side-toggle"><input type="checkbox" id="hide-samples" ${state.hideSamples ? "checked" : ""}> 예시 주제 숨기기</label>` : ""}`;
+  const $hide = document.getElementById("hide-samples");
+  if ($hide) $hide.onchange = () => {
+    state.hideSamples = $hide.checked;
+    try { localStorage.setItem("bb-hide-samples", $hide.checked ? "1" : "0"); } catch { /* 괜찮음 */ }
+    loadTopicRows();
+  };
   document.querySelectorAll("[data-folder]").forEach((b) => (b.onclick = () => {
     const k = b.dataset.folder;
     state.folder = k === "all" || k === "none" ? k : Number(k);
@@ -951,6 +964,52 @@ function setupSelectionCapture() {
 // 긴 주소는 '사이트 이름 링크'로 줄여 보여 준다 (마인드맵 질문 마디처럼 좁은 곳)
 const shortLinks = (s) => String(s).replace(/https?:\/\/(?:www\.)?([^\/\s?#]+)[^\s]*/g, "[$1 링크]");
 
+// ---------- 사용법 안내 (처음 한 번 자동으로, 이후 프로필 메뉴 → 사용법) ----------
+const GUIDE = [
+  ["질문 → 내 생각 → AI 답", "질문을 적고, AI 답을 보기 전에 내 생각을 먼저 적어요. 내 생각은 AI에게 보내지 않아요.",
+   "AI 답을 먼저 보면 내 생각이 떠오르지 않고 AI의 말을 따라가게 돼요. 먼저 적어 둔 생각이 비교의 기준이 돼요."],
+  ["이어서 묻기", "AI 답을 받은 뒤에는 같은 주제 안에서 꼬리 질문을 계속 이어 갈 수 있어요. 꼬리 질문은 내 생각을 건너뛰고 '바로 묻기'도 돼요. 지난 질문은 한 줄로 접혀요.",
+   "새 주제를 만들지 않고 한 흐름으로 이어 가야 생각이 흩어지지 않아요."],
+  ["메모함", "AI 답에서 문장을 드래그(휴대폰은 길게 눌러 선택)하면 '확인할 것 · 할 일 · 마음에 드는 것'으로 담겨요. 메모마다 우선순위를 정하면 높은 것부터 위로 정렬돼요.",
+   "AI 답의 곁가지를 바로 따라가면 대화가 원래 주제에서 벗어나요. 지금은 담아 두고, 나중에 하나씩 처리해요."],
+  ["생각 메모", "AI 답을 본 뒤, 내 생각과 비교해 무엇이 같고 달랐는지 한 줄로 남겨요.",
+   "AI 답을 그대로 받아들이지 않고, 무엇을 가져가고 무엇을 지킬지 스스로 정하는 단계예요."],
+  ["마인드맵", "주제의 대화가 쌓이면 질문마다 왼쪽은 내 생각, 오른쪽은 AI 생각, 아래는 둘이 겹치는 생각으로 정리돼요. 틀린 곳은 '직접 고치기'로 바로잡아요.",
+   "내 생각과 AI 생각이 어디서 같고 어디서 다른지 한눈에 보여, 내 관점을 잃지 않게 해 줘요."],
+];
+
+function showGuide() {
+  document.getElementById("guide")?.remove();
+  document.body.insertAdjacentHTML("beforeend", `
+    <div class="guide-backdrop" id="guide" role="dialog" aria-modal="true" aria-labelledby="guide-title">
+      <div class="guide">
+        <h2 id="guide-title">비포블랭크 사용법</h2>
+        <p class="guide-lead">AI에게 묻기 전에 내 생각부터 적고, AI 답과 나란히 비교하는 노트예요.</p>
+        <ol class="guide-steps">
+          ${GUIDE.map(([name, how, why], i) => `
+            <li>
+              <span class="g-no">${String(i + 1).padStart(2, "0")}</span>
+              <div><b>${name}</b><p>${how}</p><p class="g-why"><span>왜?</span> ${why}</p></div>
+            </li>`).join("")}
+        </ol>
+        <div class="guide-btns"><button class="btn btn-primary" id="guide-close">시작하기</button></div>
+      </div>
+    </div>`);
+  const close = () => { document.getElementById("guide")?.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+  document.getElementById("guide-close").onclick = close;
+  document.getElementById("guide").onclick = (e) => { if (e.target.id === "guide") close(); };
+  document.getElementById("guide-close").focus();
+  try { localStorage.setItem("bb-guide-seen", "1"); } catch { /* 괜찮음 */ }
+}
+
+function maybeShowGuide() {
+  let seen = false;
+  try { seen = localStorage.getItem("bb-guide-seen") === "1"; } catch { /* 괜찮음 */ }
+  if (!seen) showGuide();
+}
+
 // ---------- 드래그 안내 ----------
 // 메모함에 담는 방법(문장 드래그)을 잘 모른다는 피드백 → 마지막 AI 답 아래에 한 줄 안내. '알겠어요'를 누르거나 메모를 담으면 사라진다.
 function updateDragHint() {
@@ -970,20 +1029,29 @@ function updateDragHint() {
 }
 
 // ---------- 대화 탭 ----------
-function turnHTML(t, n) {
+// 접힌 질문 한 줄 요약에 쓰는 AI 답 미리보기 (마크다운 기호를 빼고 앞부분만)
+const answerPreview = (t) => (t.ai_answer || "").replace(/[#*`>|_]+|-{3,}/g, " ").replace(/\s+/g, " ").trim().slice(0, 140);
+
+function turnHTML(t, n, folded = false) {
   return `
-    <article class="turn" id="turn-${t.id}" data-id="${t.id}">
+    <article class="turn ${folded ? "folded" : ""} ${n > 1 ? "follow" : ""}" id="turn-${t.id}" data-id="${t.id}">
+      <button class="turn-sum" data-unfold aria-expanded="false" title="눌러서 펼치기">
+        <span class="ts-tag">${n > 1 ? "이어서 물음" : "질문"}</span>
+        <span class="ts-q">${esc(t.question)}</span>
+        <span class="ts-a">${esc(answerPreview(t))}</span>
+        <span class="ts-more" aria-hidden="true">펼치기 ▾</span>
+      </button>
       <header class="turn-meta">
-        <span class="turn-no">대화 ${String(n).padStart(2, "0")}</span>
         <span>${fmtDate(t.created_at)}</span>
+        <button class="btn btn-ghost btn-sm" data-fold>접기 ▴</button>
         <button class="btn btn-ghost danger btn-sm" data-del-turn>삭제</button>
       </header>
-      <div class="q-head"><span class="q-tag">질문</span><h2 class="turn-q">${esc(t.question)}</h2></div>
+      <div class="q-head"><span class="q-tag">${n > 1 ? "이어서 물음" : "질문"}</span><h2 class="turn-q">${esc(t.question)}</h2></div>
       ${t.attachments?.length ? `<div class="turn-files" aria-label="첨부 자료">${t.attachments.map(fileChip).join("")}</div>` : ""}
-      <section class="block mine">
+      ${t.my_thought ? `<section class="block mine">
         <div class="block-label"><i class="dot" aria-hidden="true"></i>내 생각</div>
         <div class="block-body">${esc(t.my_thought)}</div>
-      </section>
+      </section>` : ""}
       <section class="block ai">
         <div class="block-label"><i class="dot" aria-hidden="true"></i>AI 답</div>
         <div class="md" data-answer>${t.ai_answer ? md(t.ai_answer) : ""}</div>
@@ -1002,7 +1070,7 @@ function renderChatTab($panel, topic, turns, opts) {
   $panel.innerHTML = `
    <div class="chat-wrap">
     <div class="chat">
-      <div id="turns">${turns.length ? turns.map((t, i) => turnHTML(t, i + 1)).join("") : `
+      <div id="turns">${turns.length ? turns.map((t, i) => turnHTML(t, i + 1, i < turns.length - 1)).join("") : `
         <div class="chat-start">
           <h2>'${esc(topic.name)}'에 대해 무엇이 궁금한가요?</h2>
           <p>아래 입력창에 첫 질문을 적어 주세요. 이렇게 진행돼요.</p>
@@ -1037,8 +1105,19 @@ function renderChatTab($panel, topic, turns, opts) {
   else window.scrollTo(0, document.body.scrollHeight);
 }
 
+// 지난 질문은 접어서 한 줄로: 길게 늘어지지 않게, 누르면 다시 펼친다
+function foldTurn(t, fold) {
+  const $t = document.getElementById(`turn-${t.id}`);
+  if (!$t) return;
+  $t.classList.toggle("folded", fold);
+  $t.querySelector(".ts-a").textContent = answerPreview(t);
+  $t.querySelector("[data-unfold]").setAttribute("aria-expanded", String(!fold));
+}
+
 function bindTurn(t) {
   const $turn = document.getElementById(`turn-${t.id}`);
+  $turn.querySelector("[data-unfold]").onclick = () => foldTurn(t, false);
+  $turn.querySelector("[data-fold]").onclick = () => { foldTurn(t, true); $turn.scrollIntoView({ block: "nearest" }); };
   const $ask = $turn.querySelector("[data-ask]");
   if ($ask) $ask.onclick = () => streamAnswer(t);
   $turn.querySelector("[data-del-turn]").onclick = async () => {
@@ -1165,6 +1244,8 @@ function renderComposer(topic, turns) {
   const $c = document.getElementById("composer");
   const draft = (state.drafts[topic.id] ||= { step: 1, question: "", thought: "", files: [] });
   draft.files ||= [];
+  // AI 답을 한 번이라도 받은 주제에서는 꼬리 질문 → 내 생각을 건너뛰고 바로 물을 수 있다 (첫 질문은 꼭 내 생각부터)
+  const canSkip = turns.some((x) => x.ai_answer);
   const pendingChips = () => draft.files.map((f, i) =>
     `<span class="file-chip pending"><span class="fc-kind">${fileKindLabel(f.name)}</span>${esc(f.name)}<span class="fc-size">${fmtSize(f.size)}</span>${draft.step === 1 ? `<button type="button" class="fc-x" data-unfile="${i}" aria-label="${esc(f.name)} 빼기">×</button>` : ""}</span>`).join("");
 
@@ -1172,7 +1253,7 @@ function renderComposer(topic, turns) {
     $c.innerHTML = `
       <div class="composer-box">
         ${composerSteps(1)}
-        <textarea id="c-question" rows="2" aria-label="질문" placeholder="${turns.length ? "이어서 물어볼 질문을 적어 주세요" : "첫 질문을 적어 주세요"}">${esc(draft.question)}</textarea>
+        <textarea id="c-question" rows="2" aria-label="질문" placeholder="${turns.length ? "이어서 물어볼 질문을 적어 주세요 (예: 이 부분은 무슨 뜻이야?)" : "첫 질문을 적어 주세요"}">${esc(draft.question)}</textarea>
         <div class="c-files" id="c-files">${pendingChips()}</div>
         <div class="actions" style="margin-top:4px">
           <label class="attach-btn" title="자료 첨부 (txt, md, csv, pdf, 이미지 · ${MAX_MB}MB, ${MAX_FILES}개까지)">
@@ -1180,6 +1261,7 @@ function renderComposer(topic, turns) {
             <span>+ 자료 첨부</span>
           </label>
           <span class="counter" id="c-qhint">${draft.question.trim() ? "Enter를 누르면 다음 단계로 가요" : "질문을 적으면 다음 단계로 넘어갈 수 있어요"}</span>
+          ${canSkip ? `<button class="btn btn-sm" id="c-quick" ${draft.question.trim() ? "" : "disabled"} title="꼬리 질문은 내 생각을 건너뛰고 바로 물을 수 있어요">바로 묻기</button>` : ""}
           <button class="btn btn-primary btn-sm" id="c-next" ${draft.question.trim() ? "" : "disabled"}>다음: 내 생각 적기 →</button>
         </div>
       </div>`;
@@ -1187,10 +1269,14 @@ function renderComposer(topic, turns) {
     const $next = document.getElementById("c-next");
     $q.oninput = () => {
       draft.question = $q.value; $next.disabled = !$q.value.trim();
+      const $quick = document.getElementById("c-quick");
+      if ($quick) $quick.disabled = !$q.value.trim();
       document.getElementById("c-qhint").textContent = $q.value.trim() ? "Enter를 누르면 다음 단계로 가요" : "질문을 적으면 다음 단계로 넘어갈 수 있어요";
     };
     $q.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing && $q.value.trim()) { e.preventDefault(); $next.click(); } };
     $next.onclick = () => { draft.step = 2; renderComposer(topic, turns); document.getElementById("c-thought").focus(); };
+    const $quick = document.getElementById("c-quick");
+    if ($quick) $quick.onclick = () => { draft.thought = ""; submitTurn(topic, turns, draft, $quick); };
     document.getElementById("c-file").onchange = (e) => {
       for (const f of e.target.files) {
         if (draft.files.length >= MAX_FILES) { toast(`자료는 ${MAX_FILES}개까지 붙일 수 있어요`); break; }
@@ -1214,7 +1300,7 @@ function renderComposer(topic, turns) {
     <div class="composer-box">
       ${composerSteps(2)}
       <div class="composer-q">${esc(draft.question)}${draft.files.length ? `<div class="c-files">${pendingChips()}</div>` : ""}</div>
-      <div class="composer-label">AI에게 보내기 전에, 내 생각을 먼저 적어 보세요 <small>(AI에게는 보내지 않아요)</small></div>
+      <div class="composer-label">AI에게 보내기 전에, 내 생각을 먼저 적어 보세요 <small>(AI에게는 보내지 않아요${canSkip ? " · 꼬리 질문은 비워 둬도 돼요" : ""})</small></div>
       ${promptButtons()}
       <textarea id="c-thought" class="thought" aria-label="내 생각" placeholder="내 생각은…">${esc(draft.thought)}</textarea>
       <div class="actions">
@@ -1229,11 +1315,16 @@ function renderComposer(topic, turns) {
   const $send = document.getElementById("c-send");
   bindThought($t, document.getElementById("c-counter"), () => {
     draft.thought = $t.value;
-    $send.disabled = $t.value.trim().length < cfg.min_thought;
+    $send.disabled = !canSkip && $t.value.trim().length < cfg.min_thought;
   });
+  if (canSkip) $send.disabled = false;
   document.getElementById("c-back").onclick = () => { draft.step = 1; renderComposer(topic, turns); document.getElementById("c-question").focus(); };
-  $send.onclick = async () => {
-    $send.disabled = true;
+  $send.onclick = () => submitTurn(topic, turns, draft, $send);
+}
+
+// 질문 보내기: 대화 칸을 만들고, 지난 질문은 접고, AI 답을 받는다
+async function submitTurn(topic, turns, draft, $btn) {
+    $btn.disabled = true;
     try {
       const { id } = await api(`/api/topics/${topic.id}/turns`, {
         method: "POST", body: { question: draft.question.trim(), my_thought: draft.thought.trim() },
@@ -1249,6 +1340,7 @@ function renderComposer(topic, turns) {
       turns.push(t);
       const $turns = document.getElementById("turns");
       $turns.querySelector(".empty, .chat-start")?.remove();
+      turns.slice(0, -1).forEach((x) => foldTurn(x, true));
       $turns.insertAdjacentHTML("beforeend", turnHTML(t, turns.length));
       bindTurn(t);
       renderComposer(topic, turns);
@@ -1260,13 +1352,13 @@ function renderComposer(topic, turns) {
       }
       document.getElementById(`turn-${id}`).scrollIntoView({ behavior: "smooth", block: "start" });
       streamAnswer(t);
-    } catch (err) { toast(err.message); $send.disabled = false; }
-  };
+    } catch (err) { toast(err.message); $btn.disabled = false; }
 }
 
 function jumpToTurn(turnId) {
   const $t = document.getElementById(`turn-${turnId}`);
   if (!$t) { toast("해당 대화를 찾을 수 없어요."); return; }
+  $t.classList.remove("folded");  // 접혀 있던 질문이면 펼쳐서 보여 준다
   // 고정된 주제 머리에 가리지 않게 그 높이만큼 띄워서 스크롤
   const headH = document.querySelector(".topic-head")?.offsetHeight || 100;
   document.documentElement.style.setProperty("--head-h", `${headH + 16}px`);

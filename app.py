@@ -939,7 +939,7 @@ def attachment_blocks(db, turn_id):
 # ---------- 주제 ----------
 
 TOPIC_SELECT = """
-    SELECT t.id, t.name, t.folder_id, t.is_starred, t.status, t.created_at, t.updated_at,
+    SELECT t.id, t.name, t.folder_id, t.is_starred, t.status, t.created_at, t.updated_at, t.is_sample,
            COUNT(u.id) AS turn_count,
            (SELECT COUNT(*) FROM side_notes n WHERE n.topic_id = t.id AND n.done = 0) AS open_notes,
            (SELECT question FROM turns WHERE topic_id = t.id ORDER BY id DESC LIMIT 1) AS last_question
@@ -1140,11 +1140,14 @@ def create_turn(topic_id):
     thought = data.get("my_thought", "").strip()
     if not question:
         return jsonify(error="질문을 입력해 주세요."), 400
-    if len(thought) < MIN_THOUGHT_LEN:
-        return jsonify(error="내 생각을 먼저 적어야 AI 답을 볼 수 있어요."), 400
     db = get_db()
     if not own_topic(db, topic_id):
         return jsonify(error="주제를 찾을 수 없어요."), 404
+    # 주제의 첫 질문은 내 생각을 꼭 먼저 적는다. AI 답을 받은 뒤 이어서 묻는 꼬리 질문은 건너뛸 수 있다
+    # ("이 부분은 무슨 뜻이지?" 같은 짧은 질문까지 매번 생각을 적게 하면 대화가 끊긴다는 사용자 피드백)
+    follow_up = db.execute("SELECT 1 FROM turns WHERE topic_id = ? AND ai_answer IS NOT NULL LIMIT 1", (topic_id,)).fetchone()
+    if len(thought) < MIN_THOUGHT_LEN and not follow_up:
+        return jsonify(error="내 생각을 먼저 적어야 AI 답을 볼 수 있어요."), 400
     ts = now()
     cur = db.execute(
         "INSERT INTO turns (topic_id, question, my_thought, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
@@ -1628,6 +1631,7 @@ def admin_stats():
     tq = ",".join("?" * len(tids))
     notes = db.execute(f"SELECT kind, done, topic_id FROM side_notes WHERE topic_id IN ({tq}) AND is_sample = 0", tids).fetchall()
     answered = [r for r in turns if r["answered"]]
+    thought_rows = [r for r in answered if (r["mine"] or 0) > 0]  # 꼬리 질문에서 내 생각을 건너뛴 대화는 길이 통계에서 뺀다
 
     # 마인드맵: 만든 주제, 직접 고친 비율, 겹치는 생각
     # (예시로 미리 넣어 둔 마인드맵은 빼고, 사용자의 새 대화까지 반영해 다시 정리된 것만 센다)
@@ -1676,9 +1680,10 @@ def admin_stats():
         topics={"total": len(topics), "done": sum(1 for t in topics if t["status"] == "done"),
                 "avg_turns": round(len(turns) / len(topics), 1) if topics else None},
         turns={"total": len(turns), "answered": len(answered),
-               "thought_avg": round(sum(r["mine"] or 0 for r in answered) / len(answered)) if answered else None,
-               "thought_median": _median([r["mine"] or 0 for r in answered]),
-               "thought_vs_ai": _ratio(sum(r["mine"] or 0 for r in answered), sum(r["ai"] or 0 for r in answered)),
+               "thought_avg": round(sum(r["mine"] for r in thought_rows) / len(thought_rows)) if thought_rows else None,
+               "thought_median": _median([r["mine"] for r in thought_rows]),
+               "thought_vs_ai": _ratio(sum(r["mine"] for r in thought_rows), sum(r["ai"] or 0 for r in thought_rows)),
+               "skipped_thought": len(answered) - len(thought_rows),
                "reflection_rate": _ratio(sum(1 for r in answered if r["reflected"]), len(answered))},
         notes={"total": len(notes), "done_rate": _ratio(sum(1 for n in notes if n["done"]), len(notes)),
                "topic_rate": _ratio(len({n["topic_id"] for n in notes}), len(topics)),
