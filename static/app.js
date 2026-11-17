@@ -806,7 +806,7 @@ function renderNotes() {
   $p.innerHTML = `
     <div class="np-head">
       <h2>메모함 <span class="np-count" data-notes-count>${openNoteCount()}</span></h2>
-      <button class="btn btn-ghost btn-sm np-close" data-np-close aria-label="메모함 닫기">닫기</button>
+      <button class="btn btn-ghost btn-sm np-close" data-np-close aria-label="메모함 닫기" title="메모함 닫기">닫기 ›</button>
     </div>
     <p class="np-help">AI 답에서 지금 다루지 않을 내용은 <b>문장을 드래그</b>해서 여기에 담아 두세요. 담은 메모는 <b>우선순위</b>를 정하면 높은 것부터 위로 정렬돼요.</p>
     <div class="np-filters">${chip("all", "전체")}${Object.entries(NOTE_KINDS).map(([k, v]) => chip(k, v)).join("")}</div>
@@ -853,6 +853,8 @@ async function addNote(body) {
   chatCtx.filter = chatCtx.filter === "all" || chatCtx.filter === created.kind ? chatCtx.filter : "all";
   renderNotes();
   document.querySelector(`[data-note="${created.id}"]`)?.classList.add("just-added");
+  const $w = document.querySelector(".chat-wrap");
+  if ($w && ($w.classList.contains("notes-closed") || (!wideNotes() && !chatCtx.open))) toast(`메모함에 담았어요 · ${NOTE_KINDS[created.kind]}`);
   return created;
 }
 
@@ -911,9 +913,29 @@ function bindNotesPanel() {
   };
 }
 
+// 메모함 = 열고 닫는 오른쪽 사이드바. 넓은 화면에서는 옆에 붙어 있다가 접으면 대화가 넓어지고(기억해 둠),
+// 좁은 화면에서는 서랍처럼 위에 열린다.
+const wideNotes = () => window.matchMedia("(min-width: 1101px)").matches;
+function notesPref() { try { return localStorage.getItem("bb-notes-open") !== "0"; } catch { return true; } }
+function syncNotesBtn(open) {
+  const $b = document.getElementById("notes-toggle");
+  if (!$b) return;
+  $b.setAttribute("aria-pressed", String(open));
+  $b.title = open ? "메모함 닫기" : "메모함 열기";
+}
 function toggleNotes(open) {
-  chatCtx.open = open ?? !chatCtx.open;
-  document.querySelector(".chat-wrap")?.classList.toggle("notes-open", chatCtx.open);
+  const $w = document.querySelector(".chat-wrap");
+  if (!$w) return;
+  if (wideNotes()) {
+    const next = open ?? $w.classList.contains("notes-closed");
+    $w.classList.toggle("notes-closed", !next);
+    try { localStorage.setItem("bb-notes-open", next ? "1" : "0"); } catch { /* 괜찮음 */ }
+    syncNotesBtn(next);
+  } else {
+    chatCtx.open = open ?? !chatCtx.open;
+    $w.classList.toggle("notes-open", chatCtx.open);
+    syncNotesBtn(chatCtx.open);
+  }
 }
 
 // AI 답에서 문장을 드래그하면 뜨는 작은 메뉴
@@ -1114,6 +1136,10 @@ function renderChatTab($panel, topic, turns, opts) {
   bindNotesPanel();
   setupSelectionCapture();
   document.getElementById("notes-toggle")?.addEventListener("click", () => toggleNotes());
+  if (wideNotes()) {  // 넓은 화면: 지난번에 접어 두었으면 접힌 채로 시작
+    document.querySelector(".chat-wrap").classList.toggle("notes-closed", !notesPref());
+    syncNotesBtn(notesPref());
+  } else syncNotesBtn(false);
 
   if (opts.ask) {
     const t = turns.find((x) => x.id === opts.ask);

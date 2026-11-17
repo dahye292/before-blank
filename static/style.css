@@ -1535,3 +1535,14 @@ kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px s
 .caps-hint { display: block; margin-top: 4px; font-size: var(--fs-xs); font-weight: 600; color: var(--shared); }
 .caps-hint[hidden] { display: none; }
 .turn.follow .q-tag, .turn.follow .ts-tag { color: var(--quiet); }
+
+/* 메모함 사이드바: 넓은 화면에서도 열고 닫기 (머리의 '메모함' 버튼, 메모함의 '닫기') */
+@media (min-width: 1101px) {
+  .notes-toggle { display: inline-flex; }
+  .np-close { display: inline-flex; }
+  .chat-wrap { transition: grid-template-columns .2s ease; }
+  .chat-wrap.notes-closed { grid-template-columns: minmax(0, 760px); }
+  .chat-wrap.notes-closed .notes-panel { display: none; }
+}
+.notes-toggle[aria-pressed="true"] { background: var(--raised); border-color: var(--text-2); color: var(--text); }
+.notes-toggle span { font-weight: 600; }
