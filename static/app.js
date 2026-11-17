@@ -1948,6 +1948,7 @@ function viewForgot() {
     $btn.disabled = true;
     try {
       const r = await api("/api/password/forgot", { method: "POST", body: { email: $f.email.value } });
+      if (r.mail_off) { document.getElementById("form-err").textContent = r.message; return; }  // 메일을 보낼 수 없는 상태: 보냈다고 하지 않는다
       document.getElementById("form-ok").innerHTML = esc(r.message) +
         (r.dev_link ? `<br><span class="dev-note">메일 서버가 설정되지 않은 로컬 체험 환경이라, 여기서 바로 열 수 있어요: <a href="${esc(r.dev_link)}">재설정 화면 열기</a></span>` : "");
       $btn.textContent = "다시 보내기";

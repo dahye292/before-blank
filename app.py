@@ -662,6 +662,10 @@ def forgot_password():
         return jsonify(error="요청이 너무 많아요. 15분 뒤에 다시 시도해 주세요."), 429
     rate_hit("reset", email)
     rate_hit("reset_ip", client_ip())
+    # 메일 서버(SMTP)가 설정되지 않았으면 메일이 갈 수 없다 → "보냈어요"라고 하지 않고 사실대로 안내
+    # (가입 여부와 상관없이 같은 답이라 어떤 이메일이 가입됐는지는 여전히 알 수 없다)
+    if not os.environ.get("SMTP_HOST") and not (DEMO or os.environ.get("SHOW_RESET_LINK") == "1"):
+        return jsonify(message="지금은 비밀번호 재설정 메일을 보낼 수 없어요. 서비스 운영자에게 문의해 주세요.", mail_off=True)
     db = get_db()
     user = db.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
     out = {"message": generic}
