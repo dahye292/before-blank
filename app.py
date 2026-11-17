@@ -289,6 +289,10 @@ def init_db():
             db.execute("ALTER TABLE topics ADD COLUMN folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL")
         if "invite_code" not in columns(db, "users"):
             db.execute("ALTER TABLE users ADD COLUMN invite_code TEXT")
+        if "is_sample" not in columns(db, "topics"):
+            # 예시로 넣어 준 주제 표시: 통계에서 뺀다 (가입 때 넣는 [예시] 주제는 이름으로 찾아 표시)
+            db.execute("ALTER TABLE topics ADD COLUMN is_sample INTEGER NOT NULL DEFAULT 0")
+            db.execute("UPDATE topics SET is_sample = 1 WHERE name LIKE '[예시]%'")
         db.commit()
     finally:
         db.close()
@@ -1541,9 +1545,8 @@ def edit_mindmap(topic_id):
 # 가입할 때 "개인을 알아볼 수 없는 통계로만" 쓰겠다고 약속했으므로:
 #   - 질문·생각·답·메모의 '내용'은 절대 내보내지 않고 숫자만 계산한다.
 #   - 인원이 적은 묶음(5명 미만)은 숫자 대신 '5명 미만'으로 가린다.
-#   - 가입하면 자동으로 들어가는 예시 주제는 통계에서 뺀다.
+#   - 예시로 넣어 준 주제(가입 때 [예시] 주제, seed_demo.py로 넣은 주제)는 is_sample로 표시돼 통계에서 뺀다.
 MIN_GROUP = 5
-EXAMPLE_PREFIX = "[예시]"
 
 
 def _median(xs):
@@ -1582,8 +1585,8 @@ def admin_stats():
     qs = ",".join("?" * len(uids))
 
     topics = db.execute(
-        f"SELECT id, user_id, status, mindmap FROM topics WHERE user_id IN ({qs}) AND name NOT LIKE ?",
-        (*uids, EXAMPLE_PREFIX + "%")).fetchall()
+        f"SELECT id, user_id, status, mindmap FROM topics WHERE user_id IN ({qs}) AND is_sample = 0",
+        uids).fetchall()
     tids = [t["id"] for t in topics] or [-1]
     tq = ",".join("?" * len(tids))
     turns = db.execute(

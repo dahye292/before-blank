@@ -91,7 +91,8 @@ def insert_topic(db, uid, topic):
         folder_id = row[0] if row else db.execute(
             "INSERT INTO folders (user_id, name, created_at) VALUES (?, ?, ?)", (uid, topic["folder"], first)).lastrowid
     topic_id = db.execute(
-        "INSERT INTO topics (user_id, folder_id, name, created_at, updated_at, is_starred, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        # is_sample=1: 실제로 쓴 기록이 아니라 예시로 넣은 주제 → 사용 통계에서 뺀다
+        "INSERT INTO topics (user_id, folder_id, name, created_at, updated_at, is_starred, status, is_sample) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
         (uid, folder_id, topic["name"], first, last, topic.get("is_starred", 0), topic.get("status", "in_progress")),
     ).lastrowid
     ids = []
