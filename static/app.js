@@ -1010,6 +1010,26 @@ function maybeShowGuide() {
   if (!seen) showGuide();
 }
 
+// 비밀번호 칸: Caps Lock이 켜져 있으면 칸 바로 아래에 알려 준다 (로그인·회원가입·재설정·탈퇴 확인 모두)
+function capsCheck(e) {
+  const el = e.target;
+  if (!(el instanceof HTMLInputElement) || el.type !== "password" || typeof e.getModifierState !== "function") return;
+  let hint = el.nextElementSibling?.classList.contains("caps-hint") ? el.nextElementSibling : null;
+  if (!hint) {
+    hint = document.createElement("span");
+    hint.className = "caps-hint";
+    hint.setAttribute("role", "status");
+    hint.textContent = "⇪ Caps Lock이 켜져 있어요";
+    el.after(hint);
+  }
+  hint.hidden = !e.getModifierState("CapsLock");
+}
+["keydown", "keyup", "mousedown"].forEach((t) => document.addEventListener(t, capsCheck, true));
+document.addEventListener("focusout", (e) => {
+  const h = e.target?.nextElementSibling;
+  if (h?.classList?.contains("caps-hint")) h.hidden = true;
+}, true);
+
 // 단축키 표시: 맥은 ⌘, 그 밖은 Ctrl
 const MOD_KEY = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl";
 

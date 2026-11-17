@@ -1530,3 +1530,7 @@ input[type=text], input[type=search], textarea { font-size: var(--fs-body); padd
 /* 단축키 표시 */
 kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px solid var(--hairline-strong); border-bottom-width: 2px; border-radius: 4px; color: var(--muted); background: var(--surface); margin-left: 4px; line-height: 16px; }
 @media (hover: none) { kbd { display: none; } }
+
+/* Caps Lock 안내 */
+.caps-hint { display: block; margin-top: 4px; font-size: var(--fs-xs); font-weight: 600; color: var(--shared); }
+.caps-hint[hidden] { display: none; }
