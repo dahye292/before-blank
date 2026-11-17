@@ -293,6 +293,17 @@ def init_db():
             # 예시로 넣어 준 주제 표시: 통계에서 뺀다 (가입 때 넣는 [예시] 주제는 이름으로 찾아 표시)
             db.execute("ALTER TABLE topics ADD COLUMN is_sample INTEGER NOT NULL DEFAULT 0")
             db.execute("UPDATE topics SET is_sample = 1 WHERE name LIKE '[예시]%'")
+        if "is_sample" not in columns(db, "turns"):
+            # 예시 주제 안에서도 사용자가 새로 한 질문은 실제 사용으로 센다 → 예시로 넣은 대화·메모만 따로 표시
+            db.execute("ALTER TABLE turns ADD COLUMN is_sample INTEGER NOT NULL DEFAULT 0")
+            db.execute("ALTER TABLE side_notes ADD COLUMN is_sample INTEGER NOT NULL DEFAULT 0")
+            example_qs = [t["question"] for t in make_example()["turns"]]
+            db.execute(
+                f"""UPDATE turns SET is_sample = 1 WHERE question IN ({','.join('?' * len(example_qs))})
+                    AND topic_id IN (SELECT id FROM topics WHERE is_sample = 1)""", example_qs)
+            # 예시로 넣은 메모는 그 대화와 같은 시각에 만들어졌다 (사용자가 나중에 담은 메모와 구분)
+            db.execute("""UPDATE side_notes SET is_sample = 1 WHERE EXISTS (
+                SELECT 1 FROM turns tu WHERE tu.id = side_notes.turn_id AND tu.is_sample = 1 AND tu.created_at = side_notes.created_at)""")
         db.commit()
     finally:
         db.close()
@@ -1545,7 +1556,8 @@ def edit_mindmap(topic_id):
 # 가입할 때 "개인을 알아볼 수 없는 통계로만" 쓰겠다고 약속했으므로:
 #   - 질문·생각·답·메모의 '내용'은 절대 내보내지 않고 숫자만 계산한다.
 #   - 인원이 적은 묶음(5명 미만)은 숫자 대신 '5명 미만'으로 가린다.
-#   - 예시로 넣어 준 주제(가입 때 [예시] 주제, seed_demo.py로 넣은 주제)는 is_sample로 표시돼 통계에서 뺀다.
+#   - 예시로 넣어 준 주제·대화·메모(가입 때 [예시] 주제, seed_demo.py로 넣은 주제)는 is_sample로 표시돼 통계에서 뺀다.
+#     예시 주제 안에서라도 사용자가 새로 한 질문과 메모는 실제 사용으로 센다.
 MIN_GROUP = 5
 
 
@@ -1584,21 +1596,33 @@ def admin_stats():
         return jsonify(empty=True, include_owner=include_owner)
     qs = ",".join("?" * len(uids))
 
-    topics = db.execute(
-        f"SELECT id, user_id, status, mindmap FROM topics WHERE user_id IN ({qs}) AND is_sample = 0",
-        uids).fetchall()
-    tids = [t["id"] for t in topics] or [-1]
-    tq = ",".join("?" * len(tids))
+    # 예시로 넣은 대화·메모(is_sample)는 빼고, 예시 주제 안에서라도 사용자가 새로 한 질문·메모는 센다
     turns = db.execute(
-        f"""SELECT tu.created_at, length(tu.my_thought) AS mine, length(tu.ai_answer) AS ai,
+        f"""SELECT tu.id, tu.topic_id, tu.created_at, length(tu.my_thought) AS mine, length(tu.ai_answer) AS ai,
                    (tu.ai_answer IS NOT NULL) AS answered, (trim(coalesce(tu.reflection, '')) != '') AS reflected,
                    t.user_id
-            FROM turns tu JOIN topics t ON t.id = tu.topic_id WHERE tu.topic_id IN ({tq})""", tids).fetchall()
-    notes = db.execute(f"SELECT kind, done, topic_id FROM side_notes WHERE topic_id IN ({tq})", tids).fetchall()
+            FROM turns tu JOIN topics t ON t.id = tu.topic_id
+            WHERE t.user_id IN ({qs}) AND tu.is_sample = 0""", uids).fetchall()
+    used_topic_ids = {r["topic_id"] for r in turns}
+    # 주제: 직접 만든 주제 + 예시 주제 중 새 질문을 이어 간 주제
+    topics = [t for t in db.execute(
+        f"SELECT id, user_id, status, mindmap, is_sample FROM topics WHERE user_id IN ({qs})", uids)
+        if not t["is_sample"] or t["id"] in used_topic_ids]
+    tids = [t["id"] for t in topics] or [-1]
+    tq = ",".join("?" * len(tids))
+    notes = db.execute(f"SELECT kind, done, topic_id FROM side_notes WHERE topic_id IN ({tq}) AND is_sample = 0", tids).fetchall()
     answered = [r for r in turns if r["answered"]]
 
     # 마인드맵: 만든 주제, 직접 고친 비율, 겹치는 생각
-    maps = [json.loads(t["mindmap"]) for t in topics if t["mindmap"]]
+    # (예시로 미리 넣어 둔 마인드맵은 빼고, 사용자의 새 대화까지 반영해 다시 정리된 것만 센다)
+    real_turn_ids = {r["id"] for r in turns}
+    maps = []
+    for t in topics:
+        if not t["mindmap"]:
+            continue
+        m = json.loads(t["mindmap"])
+        if not t["is_sample"] or real_turn_ids & {x for x in m.get("signature", []) if isinstance(x, int)}:
+            maps.append(m)
     shared = [p for m in maps for p in m.get("shared", [])]
 
     # 최근 14일 새 대화

@@ -98,8 +98,8 @@ def insert_topic(db, uid, topic):
     ids = []
     for t in topic["turns"]:
         ids.append(db.execute(
-            """INSERT INTO turns (topic_id, question, my_thought, ai_answer, reflection, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO turns (topic_id, question, my_thought, ai_answer, reflection, created_at, updated_at, is_sample)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
             (topic_id, t["question"], t["my_thought"], t["ai_answer"], t.get("memo", ""), t["at"], t["at"]),
         ).lastrowid)
     if topic.get("mindmap"):
@@ -113,8 +113,8 @@ def insert_topic(db, uid, topic):
     for n in topic.get("notes", []):
         at = topic["turns"][n["turn"]]["at"]
         db.execute(
-            """INSERT INTO side_notes (topic_id, turn_id, user_id, kind, text, note, priority, done, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO side_notes (topic_id, turn_id, user_id, kind, text, note, priority, done, created_at, updated_at, is_sample)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
             (topic_id, ids[n["turn"]], uid, n["kind"], n["text"], n.get("note", ""), n.get("priority", "mid"), n.get("done", 0), at, at),
         )
     return topic_id, ids
