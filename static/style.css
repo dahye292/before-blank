@@ -1526,3 +1526,7 @@ input[type=text], input[type=search], textarea { font-size: var(--fs-body); padd
 .guide-btns { display: flex; justify-content: flex-end; margin-top: var(--sp-4); }
 @media (max-width: 760px) { .guide { padding: var(--sp-4); } }
 .ts-more { grid-row: 1; grid-column: 3; } .ts-tag { grid-row: 1; grid-column: 1; } .ts-q { grid-row: 1; grid-column: 2; } .ts-a { grid-row: 2; }
+
+/* 단축키 표시 */
+kbd { font-family: var(--mono); font-size: 10.5px; padding: 0 4px; border: 1px solid var(--hairline-strong); border-bottom-width: 2px; border-radius: 4px; color: var(--muted); background: var(--surface); margin-left: 4px; line-height: 16px; }
+@media (hover: none) { kbd { display: none; } }

@@ -968,7 +968,7 @@ const shortLinks = (s) => String(s).replace(/https?:\/\/(?:www\.)?([^\/\s?#]+)[^
 const GUIDE = [
   ["질문 → 내 생각 → AI 답", "질문을 적고, AI 답을 보기 전에 내 생각을 먼저 적어요. 내 생각은 AI에게 보내지 않아요.",
    "AI 답을 먼저 보면 내 생각이 떠오르지 않고 AI의 말을 따라가게 돼요. 먼저 적어 둔 생각이 비교의 기준이 돼요."],
-  ["이어서 묻기", "AI 답을 받은 뒤에는 같은 주제 안에서 꼬리 질문을 계속 이어 갈 수 있어요. 꼬리 질문은 내 생각을 건너뛰고 '바로 묻기'도 돼요. 지난 질문은 한 줄로 접혀요.",
+  ["이어서 묻기", "AI 답을 받은 뒤에는 같은 주제 안에서 꼬리 질문을 계속 이어 갈 수 있어요. 꼬리 질문은 내 생각을 건너뛰고 '바로 묻기'도 돼요(Enter는 내 생각 적기, Ctrl+Enter는 바로 묻기). 지난 질문은 한 줄로 접혀요.",
    "새 주제를 만들지 않고 한 흐름으로 이어 가야 생각이 흩어지지 않아요."],
   ["메모함", "AI 답에서 문장을 드래그(휴대폰은 길게 눌러 선택)하면 '확인할 것 · 할 일 · 마음에 드는 것'으로 담겨요. 메모마다 우선순위를 정하면 높은 것부터 위로 정렬돼요.",
    "AI 답의 곁가지를 바로 따라가면 대화가 원래 주제에서 벗어나요. 지금은 담아 두고, 나중에 하나씩 처리해요."],
@@ -1009,6 +1009,9 @@ function maybeShowGuide() {
   try { seen = localStorage.getItem("bb-guide-seen") === "1"; } catch { /* 괜찮음 */ }
   if (!seen) showGuide();
 }
+
+// 단축키 표시: 맥은 ⌘, 그 밖은 Ctrl
+const MOD_KEY = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl";
 
 // ---------- 드래그 안내 ----------
 // 메모함에 담는 방법(문장 드래그)을 잘 모른다는 피드백 → 마지막 AI 답 아래에 한 줄 안내. '알겠어요'를 누르거나 메모를 담으면 사라진다.
@@ -1246,6 +1249,8 @@ function renderComposer(topic, turns) {
   draft.files ||= [];
   // AI 답을 한 번이라도 받은 주제에서는 꼬리 질문 → 내 생각을 건너뛰고 바로 물을 수 있다 (첫 질문은 꼭 내 생각부터)
   const canSkip = turns.some((x) => x.ai_answer);
+  const qHint = (q) => !q.trim() ? "질문을 적으면 다음 단계로 넘어갈 수 있어요"
+    : canSkip ? `Enter: 내 생각 적기 · ${MOD_KEY}+Enter: 바로 묻기` : "Enter를 누르면 내 생각을 적는 단계로 가요";
   const pendingChips = () => draft.files.map((f, i) =>
     `<span class="file-chip pending"><span class="fc-kind">${fileKindLabel(f.name)}</span>${esc(f.name)}<span class="fc-size">${fmtSize(f.size)}</span>${draft.step === 1 ? `<button type="button" class="fc-x" data-unfile="${i}" aria-label="${esc(f.name)} 빼기">×</button>` : ""}</span>`).join("");
 
@@ -1260,8 +1265,8 @@ function renderComposer(topic, turns) {
             <input type="file" id="c-file" multiple accept=".txt,.md,.csv,.pdf,.png,.jpg,.jpeg,.webp" hidden>
             <span>+ 자료 첨부</span>
           </label>
-          <span class="counter" id="c-qhint">${draft.question.trim() ? "Enter를 누르면 다음 단계로 가요" : "질문을 적으면 다음 단계로 넘어갈 수 있어요"}</span>
-          ${canSkip ? `<button class="btn btn-sm" id="c-quick" ${draft.question.trim() ? "" : "disabled"} title="꼬리 질문은 내 생각을 건너뛰고 바로 물을 수 있어요">바로 묻기</button>` : ""}
+          <span class="counter" id="c-qhint">${qHint(draft.question)}</span>
+          ${canSkip ? `<button class="btn btn-sm" id="c-quick" ${draft.question.trim() ? "" : "disabled"} title="꼬리 질문은 내 생각을 건너뛰고 바로 물을 수 있어요 (${MOD_KEY}+Enter)">바로 묻기 <kbd>${MOD_KEY}+Enter</kbd></button>` : ""}
           <button class="btn btn-primary btn-sm" id="c-next" ${draft.question.trim() ? "" : "disabled"}>다음: 내 생각 적기 →</button>
         </div>
       </div>`;
@@ -1271,9 +1276,15 @@ function renderComposer(topic, turns) {
       draft.question = $q.value; $next.disabled = !$q.value.trim();
       const $quick = document.getElementById("c-quick");
       if ($quick) $quick.disabled = !$q.value.trim();
-      document.getElementById("c-qhint").textContent = $q.value.trim() ? "Enter를 누르면 다음 단계로 가요" : "질문을 적으면 다음 단계로 넘어갈 수 있어요";
+      document.getElementById("c-qhint").textContent = qHint($q.value);
     };
-    $q.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing && $q.value.trim()) { e.preventDefault(); $next.click(); } };
+    $q.onkeydown = (e) => {
+      if (e.key !== "Enter" || e.shiftKey || e.isComposing || !$q.value.trim()) return;
+      e.preventDefault();
+      const quick = document.getElementById("c-quick");
+      if ((e.ctrlKey || e.metaKey) && quick) quick.click();  // Ctrl+Enter → 바로 묻기 (꼬리 질문일 때)
+      else $next.click();                                    // Enter → 내 생각 적기
+    };
     $next.onclick = () => { draft.step = 2; renderComposer(topic, turns); document.getElementById("c-thought").focus(); };
     const $quick = document.getElementById("c-quick");
     if ($quick) $quick.onclick = () => { draft.thought = ""; submitTurn(topic, turns, draft, $quick); };
