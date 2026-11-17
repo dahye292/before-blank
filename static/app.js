@@ -5,6 +5,7 @@
 //   #/new                    새 주제 시작
 //   #/topic/:id              주제 > 대화 탭  (?turn=ID 로 특정 대화 위치로 이동)
 //   #/topic/:id/map          주제 > 마인드맵 탭
+//   #/topic/:id/pyramid      주제 > 결론 정리 탭 (피라미드: 결론 → 단계별 근거 → 반대로 생각하면?)
 const $app = document.getElementById("app");
 const cfg = { min_thought: 1, demo: false };
 const state = {
@@ -727,6 +728,7 @@ async function viewTopic(id, tab, opts = {}) {
         <nav class="tabs">
           <a class="tab ${tab === "chat" ? "active" : ""}" href="#/topic/${id}">대화</a>
           <a class="tab ${tab === "map" ? "active" : ""}" href="#/topic/${id}/map">마인드맵</a>
+          <a class="tab ${tab === "pyramid" ? "active" : ""}" href="#/topic/${id}/pyramid">결론 정리</a>
         </nav>
       </div>
     </header>
@@ -758,6 +760,7 @@ async function viewTopic(id, tab, opts = {}) {
 
   const $panel = document.getElementById("panel");
   if (tab === "map") renderMapTab($panel, topic, turns);
+  else if (tab === "pyramid") renderPyramidTab($panel, topic, turns);
   else renderChatTab($panel, topic, turns, opts);
 }
 
@@ -1891,8 +1894,107 @@ function paintMap(ctx) {
   resizeObs.observe($map);
 }
 
+// ---------- 결론 정리 (피라미드) ----------
+// 마인드맵으로 펼친 걸 모으는 곳: 맨 위 결론 한 줄, 그 밑 근거 = 단계마다 적은 결론, 맨 아래 '반대로 생각하면?'
+function renderPyramidTab($panel, topic, turns) {
+  const stages = chatCtx.stages || [];
+  if (!stages.length) {
+    $panel.innerHTML = `<div class="py-page"><div class="map-loading">대화에서 질문을 하면 단계가 생기고, 여기서 단계별 결론을 하나의 결론으로 모을 수 있어요.</div></div>`;
+    return;
+  }
+  const firstTurn = (sid) => turns.find((t) => t.stage_id === sid)?.id;
+  const stateText = () => {
+    const left = stages.filter((x) => !x.conclusion).length;
+    return left ? `근거 ${stages.length - left}/${stages.length} 채움` : "근거를 다 채웠어요";
+  };
+  $panel.innerHTML = `
+    <div class="py-page">
+      <div class="map-bar">
+        <p class="py-lead">결론 먼저, 그 밑에 근거 ${tip("근거는 대화의 단계마다 적은 결론이에요. 여기서 고치면 대화 화면의 단계 결론도 같이 바뀌어요. 근거를 채운 뒤 맨 위 결론을 한 줄로 정리하고, 맨 아래에 반대로 생각하면 어떤지 적어 두면 놓친 반대 근거가 보여요.", "결론 정리 안내")}</p>
+        <span class="py-state" id="py-state">${stateText()}</span>
+      </div>
+      <section class="py" id="py">
+        <svg class="py-lines" aria-hidden="true"></svg>
+        <div class="py-top">
+          <label class="py-label" for="py-concl">결론</label>
+          <textarea class="py-in py-concl" id="py-concl" data-field="conclusion" rows="1" maxlength="500" placeholder="아래 근거를 보고 한 줄로 정리해 보세요">${esc(topic.conclusion || "")}</textarea>
+        </div>
+        <div class="py-mid">
+          ${stages.map((st, i) => `
+            <article class="py-ev ${st.conclusion ? "" : "empty"}">
+              <button type="button" class="py-ev-head" ${firstTurn(st.id) ? `data-goto="${firstTurn(st.id)}"` : ""} title="이 단계 대화로 가기">
+                <span class="mm-qno">근거 ${i + 1} · 단계 ${i + 1}</span>${esc(clip(shortLinks(st.title), 60))}
+              </button>
+              <textarea class="py-in" data-stage-concl="${st.id}" rows="1" maxlength="500" aria-label="단계 ${i + 1} 결론" placeholder="이 단계에서 정한 것을 한 줄로">${esc(st.conclusion || "")}</textarea>
+            </article>`).join("")}
+        </div>
+        <div class="py-counter">
+          <label class="py-label" for="py-counter">반대로 생각하면?</label>
+          <textarea class="py-in" id="py-counter" data-field="counter" rows="1" maxlength="500" placeholder="이 결론이 틀릴 수 있는 이유나 반대 근거를 한 줄로">${esc(topic.counter || "")}</textarea>
+        </div>
+      </section>
+      ${stages.length >= 3 ? `<p class="py-mece">단계끼리 겹치거나 빠진 게 없는지 한 번 살펴보세요 ${tip("서로 겹치지 않고, 합치면 빠짐없이(MECE). 처음부터 완벽하게 나누기보다 나눈 뒤에 겹침·누락을 점검하면 돼요.", "점검 안내")}</p>` : ""}
+    </div>`;
+
+  const $py = document.getElementById("py");
+  const grow = (ta) => { ta.style.height = "auto"; ta.style.height = `${ta.scrollHeight + 2}px`; };
+  // 결론에서 근거로 내려가는 가지
+  const drawLines = () => {
+    const svg = $py.querySelector(".py-lines"), base = $py.getBoundingClientRect();
+    const top = $py.querySelector(".py-top").getBoundingClientRect();
+    const x1 = top.left + top.width / 2 - base.left, y1 = top.bottom - base.top;
+    svg.setAttribute("width", base.width); svg.setAttribute("height", base.height);
+    svg.innerHTML = [...$py.querySelectorAll(".py-ev")].map((ev) => {
+      const r = ev.getBoundingClientRect(), x2 = r.left + r.width / 2 - base.left, y2 = r.top - base.top, m = (y1 + y2) / 2;
+      return `<path d="M${x1},${y1} C${x1},${m} ${x2},${m} ${x2},${y2}"/>`;
+    }).join("");
+  };
+  // 칸을 벗어나면(또는 Enter) 저장. 단계 결론은 대화 화면의 단계 결론과 같은 값
+  const saved = new Map();
+  $py.querySelectorAll(".py-in").forEach((ta) => {
+    saved.set(ta, ta.value.trim());
+    grow(ta);
+    ta.oninput = () => { grow(ta); drawLines(); };
+    ta.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); ta.blur(); } };
+    ta.onblur = async () => {
+      const v = ta.value.trim();
+      if (v === saved.get(ta)) return;
+      try {
+        if (ta.dataset.field) {
+          await api(`/api/topics/${topic.id}`, { method: "PATCH", body: { [ta.dataset.field]: v } });
+          topic[ta.dataset.field] = v;
+        } else {
+          const id = Number(ta.dataset.stageConcl);
+          await api(`/api/stages/${id}`, { method: "PATCH", body: { conclusion: v } });
+          const st = stages.find((x) => x.id === id);
+          if (st) st.conclusion = v;
+          ta.closest(".py-ev").classList.toggle("empty", !v);
+          document.getElementById("py-state").textContent = stateText();
+        }
+        saved.set(ta, v);
+        toast("저장했어요");
+      } catch (err) { toast(err.message); }
+    };
+  });
+  $py.onclick = (e) => {
+    const g = e.target.closest("[data-goto]");
+    if (g) location.hash = `#/topic/${topic.id}?turn=${g.dataset.goto}`;
+  };
+  drawLines();
+  // 글꼴이 늦게 오거나 폭이 바뀌면 줄 수가 달라지므로 높이를 다시 맞춘다
+  const regrow = () => { if (!document.body.contains($py)) return; $py.querySelectorAll(".py-in").forEach(grow); drawLines(); };
+  document.fonts?.ready.then(regrow);
+  let lastW = $py.clientWidth;
+  if (resizeObs) resizeObs.disconnect();
+  resizeObs = new ResizeObserver(() => {
+    if (!document.body.contains($py)) return;
+    if ($py.clientWidth !== lastW) { lastW = $py.clientWidth; regrow(); } else drawLines();
+  });
+  resizeObs.observe($py);
+}
+
 // ---- 마인드맵 보기: 주제가 가운데, 단계가 양옆 큰 가지, 요점이 그 끝의 잔가지 ----
-// 같은 단계에서 여러 번 물어도 그 단계 가지만 굵어진다. 드래그로 이동, 버튼·Ctrl+휠·두 손가락으로 확대·축소
+// 단계는 오른쪽에 1, 2, 3 순서대로. 같은 단계에서 여러 번 물어도 그 단계 가지만 굵어진다. 드래그로 이동, 버튼·Ctrl+휠·두 손가락으로 확대·축소
 function paintRadial(ctx, rows, point, view, jump) {
   const $area = document.getElementById("map-area");
   const sel = view.turns ? String(view.turns[0]) : null;
@@ -1947,10 +2049,10 @@ function paintRadial(ctx, rows, point, view, jump) {
     groups.forEach((g) => {
       g.lh = g.leaves.reduce((s, l) => s + l.h, 0) + Math.max(0, g.leaves.length - 1) * LG;
       g.h = Math.max(g.stage.h, g.lh);
-      g.side = narrow || tot.R <= tot.L ? "R" : "L";
+      g.side = "R";  // 양옆으로 나누면 1→2→3 순서가 안 보여서, 단계는 늘 오른쪽에 위에서 아래로
       col[g.side].push(g); tot[g.side] += g.h + BG;
     });
-    root.x = narrow ? 0 : -root.w / 2; root.y = -root.h / 2;
+    root.x = 0; root.y = -root.h / 2;
     // 좁은 화면: 옆으로 뻗으면 잘리므로 주제 아래로 단계, 단계 아래로 요점이 내려가는 나무 모양
     if (narrow) {
       root.x = 0; root.y = 0;
@@ -2516,6 +2618,7 @@ async function route() {
   if (path === "/stats") return viewStats(qs.get("owner") === "1");
   if (path === "/new") await viewNewTopic();
   else if ((m = path.match(/^\/topic\/(\d+)\/map$/))) { window.scrollTo(0, 0); await viewTopic(Number(m[1]), "map"); }
+  else if ((m = path.match(/^\/topic\/(\d+)\/pyramid$/))) { window.scrollTo(0, 0); await viewTopic(Number(m[1]), "pyramid"); }
   else if ((m = path.match(/^\/topic\/(\d+)$/))) {
     const opts = { turn: Number(qs.get("turn")) || null, ask: Number(qs.get("ask")) || null };
     // 주소에서 ?ask/?turn을 지워 둔다: 새로고침해도 다시 묻지 않고, 같은 요점을 또 눌러도 이동하게

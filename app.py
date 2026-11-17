@@ -320,6 +320,10 @@ def init_db():
             # 예시로 넣은 메모는 그 대화와 같은 시각에 만들어졌다 (사용자가 나중에 담은 메모와 구분)
             db.execute("""UPDATE side_notes SET is_sample = 1 WHERE EXISTS (
                 SELECT 1 FROM turns tu WHERE tu.id = side_notes.turn_id AND tu.is_sample = 1 AND tu.created_at = side_notes.created_at)""")
+        if "conclusion" not in columns(db, "topics"):
+            # 피라미드 정리: 주제 결론 한 줄 + '반대로 생각하면?' 한 줄 (근거는 각 단계의 결론)
+            db.execute("ALTER TABLE topics ADD COLUMN conclusion TEXT NOT NULL DEFAULT ''")
+            db.execute("ALTER TABLE topics ADD COLUMN counter TEXT NOT NULL DEFAULT ''")
         if "stage_id" not in columns(db, "turns"):
             # 한 주제 = 단계 박스들. 지금까지의 질문은 하나씩 단계가 되고,
             # 내 생각 없이 이어 물은 꼬리 질문은 바로 앞 단계 박스에 붙인다
@@ -965,7 +969,7 @@ def attachment_blocks(db, turn_id):
 # ---------- 주제 ----------
 
 TOPIC_SELECT = """
-    SELECT t.id, t.name, t.folder_id, t.is_starred, t.status, t.created_at, t.updated_at, t.is_sample,
+    SELECT t.id, t.name, t.folder_id, t.is_starred, t.status, t.created_at, t.updated_at, t.is_sample, t.conclusion, t.counter,
            COUNT(u.id) AS turn_count,
            (SELECT COUNT(*) FROM side_notes n WHERE n.topic_id = t.id AND n.done = 0) AS open_notes,
            (SELECT question FROM turns WHERE topic_id = t.id ORDER BY id DESC LIMIT 1) AS last_question
@@ -1056,6 +1060,9 @@ def update_topic(topic_id):
         db.execute("UPDATE topics SET folder_id = ? WHERE id = ?", (fid, topic_id))
     if data.get("status") in ("in_progress", "done"):
         db.execute("UPDATE topics SET status = ? WHERE id = ?", (data["status"], topic_id))
+    for key in ("conclusion", "counter"):  # 피라미드: 결론 한 줄, 반대로 생각하면?
+        if key in data:
+            db.execute(f"UPDATE topics SET {key} = ? WHERE id = ?", (str(data[key] or "").strip()[:500], topic_id))
     db.commit()
     return jsonify(ok=True)
 
