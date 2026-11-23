@@ -676,7 +676,7 @@ async function viewNewTopic() {
       </form>
       <ol class="flow-preview" aria-label="다음에 할 일">
         <li><span class="step-num">01</span> 질문을 적어요</li>
-        <li><span class="step-num">02</span> AI 답을 보기 전에 내 생각을 먼저 써요</li>
+        <li><span class="step-num">02</span> AI 답을 보기 전에 떠오르는 걸 먼저 적어요</li>
         <li><span class="step-num">03</span> AI 답을 보고 비교해요</li>
       </ol>
     </div>`;
@@ -992,8 +992,8 @@ const shortLinks = (s) => String(s).replace(/https?:\/\/(?:www\.)?([^\/\s?#]+)[^
 
 // ---------- 사용법 안내 (처음 한 번 자동으로, 이후 프로필 메뉴 → 사용법) ----------
 const GUIDE = [
-  ["질문 → 내 생각 → AI 답", "질문을 적고, AI 답을 보기 전에 내 생각을 먼저 적어요. 내 생각은 AI에게 보내지 않아요.",
-   "AI 답을 먼저 보면 내 생각이 떠오르지 않고 AI의 말을 따라가게 돼요. 먼저 적어 둔 생각이 비교의 기준이 돼요."],
+  ["질문 → 내 생각 → AI 답", "질문을 적고, AI 답을 보기 전에 지금 떠오르는 걸 먼저 적어요. 내 의견이든, 챙길 것·궁금한 점 같은 메모든 괜찮아요. AI에게는 보내지 않아요.",
+   "AI 답을 먼저 보면 원래 하던 생각이 사라지고 AI의 말을 따라가게 돼요. 묻기 전에 붙잡아 둔 생각과 메모가 기준이 되고, 마인드맵은 그중 의견만 골라 AI 답과 비교해요."],
   ["단계로 나눠 묻기", "한 주제는 단계 박스로 나뉘어요(예: ① 지표 고르기 → ② 수치 정하기). 궁금한 건 그 단계 안에서 이어서 묻고(꼬리 질문은 Ctrl+Enter로 내 생각 없이 바로), 단계가 끝나면 '이 단계 결론'을 한 줄로 적고 '+ 새 단계'로 넘어가요.",
    "단계마다 그 단계 질문만 모여 있어 찾기 쉽고, AI에게는 그 단계 대화와 앞 단계 결론만 가서 깊이 물어도 산으로 가지 않아요."],
   ["메모함", "AI 답에서 문장을 드래그(휴대폰은 길게 눌러 선택)하면 '확인할 것 · 할 일 · 마음에 드는 것'으로 담겨요. 메모마다 우선순위를 정하면 높은 것부터 위로 정렬돼요.",
@@ -1522,9 +1522,9 @@ function renderComposer(topic, turns) {
       ${targetBar}
       ${composerSteps(2)}
       <div class="composer-q">${esc(draft.question)}${draft.files.length ? `<div class="c-files">${pendingChips()}</div>` : ""}</div>
-      <div class="composer-label">AI에게 보내기 전에, 내 생각을 먼저 적어 보세요 <small>(AI에게는 보내지 않아요${canSkip ? " · 이 단계의 꼬리 질문은 비워 둬도 돼요" : ""})</small></div>
+      <div class="composer-label">묻기 전에, 지금 떠오르는 걸 먼저 적어 두세요 <small>(내 의견·챙길 것·궁금한 점 무엇이든 · AI에게는 보내지 않아요${canSkip ? " · 이 단계의 꼬리 질문은 비워 둬도 돼요" : ""})</small></div>
       ${promptButtons()}
-      <textarea id="c-thought" class="thought" aria-label="내 생각" placeholder="내 생각은…">${esc(draft.thought)}</textarea>
+      <textarea id="c-thought" class="thought" aria-label="내 생각" placeholder="예: 노인 비율이 제일 중요할 것 같다 / 출처는 따로 확인하기">${esc(draft.thought)}</textarea>
       <div class="actions">
         <button class="btn btn-ghost btn-sm" id="c-back">← 질문 고치기</button>
         <div style="display:flex;gap:10px;align-items:center">
@@ -2356,7 +2356,7 @@ function brandPanel() {
 
       <ol class="brand-steps">
         <li><span class="step-num">01</span><div><b>질문을 적어요</b><p>AI에게 물어보고 싶은 걸 먼저 적어요.</p></div></li>
-        <li><span class="step-num">02</span><div><b>내 생각을 먼저 써요</b><p>내 생각을 적어야 AI 답이 열려요. 내 생각은 AI에게 보내지 않아요.</p></div></li>
+        <li><span class="step-num">02</span><div><b>내 생각을 먼저 써요</b><p>내 의견이든 챙길 메모든, 먼저 적어야 AI 답이 열려요. AI에게는 보내지 않아요.</p></div></li>
         <li><span class="step-num">03</span><div><b>곁가지는 메모함에</b><p>AI 답에서 확인할 것, 할 일, 마음에 드는 아이디어는 드래그해서 담아 두고, 대화는 원래 주제로 이어 가요.</p></div></li>
         <li><span class="step-num">04</span><div><b>마인드맵으로 정리돼요</b><p>나만의 관점, 겹치는 생각, AI만의 관점이 나뉘고, 누르면 그 대화로 이동해요.</p></div></li>
       </ol>
